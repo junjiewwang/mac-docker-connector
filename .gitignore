@@ -28,3 +28,5 @@ accessor/docker-accessor*.zip
 accessor/docker-accessor-*-sha256.txt
 tmp/
 .DS_Store
+
+.idea
