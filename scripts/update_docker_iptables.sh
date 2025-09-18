@@ -362,7 +362,5 @@ main() {
     echo "如需恢复，可使用备份文件: iptables-restore < $backup_file"
 }
 
-# 如果直接运行脚本则执行主函数
-if [ "$(basename "$0")" = "cleanup-docker-iptables.sh" ] || [ "$0" = "./cleanup-docker-iptables.sh" ] || [ "$0" = "cleanup-docker-iptables.sh" ]; then
-    main "$@"
-fi
+
+main "$@"
