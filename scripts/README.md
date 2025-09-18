@@ -35,8 +35,16 @@ iptables 的处理流程是「表→链→规则」，数据包需先经过raw�
    FORWARD链的默认策略是否为DROP？
    若默认策略是DROP，且没有允许转发的规则，包会被丢弃（但仍会进入FORWARD链再被丢弃，可通过日志确认）。
 3. 若raw中有Drop记录，指向的是Docker容器的IP地址，则需要参考docker网络的文档
-   > To stop Docker from setting the FORWARD chain's policy to DROP, include "ip-forward-no-drop": true in /etc/docker/daemon.json, or add option --ip-forward-no-drop to the dockerd command line.
-
+   在桥接网络发布端口时不创建 raw 表规则（降低安全性）
+   设置环境变量 DOCKER_INSECURE_NO_IPTABLES_RAW=1 可让 Docker 在内核不支持 CONFIG_IP_NF_RAW 的系统上运行，同时不在 iptables raw 表创建规则。警告：这会降低安全性，可能使发布到 127.0.0.1 的端口也能被同网段其他主机直连，不建议用于生产。[28.0.2 网络]
+   设置方式，在docker的service文件里设置如下
+   ```toml
+   [Service]
+   Environment="DOCKER_INSECURE_NO_IPTABLES_RAW=1"
+   ```
+   如果不生效就只能在配置文件iptables关掉了，参考资料prevent-docker-from-manipulating-iptables
 ## 资料
 ### docker网络
 https://docs.docker.com/engine/network/packet-filtering-firewalls/
+https://docs.docker.com/engine/release-notes/28/#networking-6
+https://docs.docker.com/engine/network/packet-filtering-firewalls/#prevent-docker-from-manipulating-iptables
