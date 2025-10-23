@@ -1,0 +1,14 @@
+services:
+  mac-docker-connector:
+    stdin_open: true
+    tty: true
+    restart: always
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    container_name: mac-connector
+    command:
+      - desktop-connector
+      - -port=2521
+      - -addr=192.168.252.1/24
+    image: wenjunxiao/desktop-docker-connector:latest
