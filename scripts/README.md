@@ -13,6 +13,7 @@ sudo ./setup-docker-network.sh
 ```
 
 **脚本会自动完成所有配置**，包括：
+
 - ✅ Docker 容器访问外网
 - ✅ 宿主机直接访问容器 IP
 - ✅ Kubernetes Pod/Service 直接访问
@@ -39,6 +40,7 @@ curl http://172.17.0.2  # 直接访问！
 ```
 
 **更多场景**：
+
 - 🔧 **微服务调试**：不用记一堆端口号，直接用容器 IP
 - 🧪 **集成测试**：测试脚本可以直接连接容器，无需端口转发
 - ☸️ **Kubernetes 开发**：在 Mac 上直接访问 Pod IP 和 Service IP
@@ -65,6 +67,7 @@ curl http://172.17.0.2  # 直接访问！
 ```
 
 **核心技术**：
+
 - **TUN 虚拟网卡**：在宿主机和虚拟机之间建立隧道
 - **iptables 转发**：智能路由数据包
 - **静态路由**：让宿主机知道如何访问容器网络
@@ -89,6 +92,7 @@ curl http://<container_ip>  # 成功！🎉
 ```
 
 **高级选项**：
+
 ```bash
 # 查看详细配置信息
 sudo ./setup-docker-network.sh -v
@@ -247,12 +251,13 @@ sudo tcpdump -i tun0 -nn host <container_ip>
 
 ### 常见问题速查
 
-| 问题 | 可能原因 | 解决方案 |
-|------|----------|----------|
-| 🚫 无法访问容器 | Docker iptables 配置错误 | 设置 `"iptables": false` 并重启 Docker |
-| 🚫 容器无法访问外网 | 缺少 NAT 规则 | 运行 `sudo ./setup-docker-network.sh` |
-| 🚫 DNS 解析失败 | DNS 配置未生效 | 重启 `systemd-resolved` 服务 |
-| 🚫 Minikube 重启后失效 | IP 地址变化 | 重新运行配置脚本 |
+| 问题                | 可能原因                 | 解决方案                                |
+|-------------------|----------------------|-------------------------------------|
+| 🚫 无法访问容器         | Docker iptables 配置错误 | 设置 `"iptables": false` 并重启 Docker   |
+| 🚫 容器无法访问外网       | 缺少 NAT 规则            | 运行 `sudo ./setup-docker-network.sh` |
+| 🚫 DNS 解析失败       | DNS 配置未生效            | 重启 `systemd-resolved` 服务            |
+| 🚫 Minikube 重启后失效 | IP 地址变化              | 重新运行配置脚本                            |
+| 同子网容器之间网络不通       | 防火墙阻拦                | 关闭防火墙                               |
 
 <details>
 <summary>📚 <b>点击展开：详细故障排查指南</b></summary>
@@ -262,6 +267,7 @@ sudo tcpdump -i tun0 -nn host <container_ip>
 **现象**：脚本提示 `iptables = true`
 
 **解决**：
+
 ```bash
 # 备份配置
 sudo cp /etc/docker/daemon.json /etc/docker/daemon.json.backup
@@ -282,6 +288,7 @@ sudo systemctl restart docker
 **原因**：单向路由问题
 
 **解决**：
+
 ```bash
 # 检查回包规则
 sudo iptables -L FORWARD -n -v | grep ESTABLISHED
@@ -294,6 +301,7 @@ sudo sysctl -w net.ipv4.conf.tun0.rp_filter=0
 ### 问题 3：网段冲突
 
 **解决**：
+
 ```bash
 # 删除 Minikube
 minikube delete
@@ -305,6 +313,7 @@ minikube start --service-cluster-ip-range='10.96.0.0/16'
 ### 问题 4：DNS 配置不生效
 
 **解决**：
+
 ```bash
 # 检查服务状态
 systemctl status systemd-resolved
@@ -426,15 +435,18 @@ ip route show table all
 ## 📚 参考资料
 
 ### 官方文档
+
 - [Docker 网络概述](https://docs.docker.com/network/)
 - [Kubernetes 网络模型](https://kubernetes.io/docs/concepts/cluster-administration/networking/)
 - [Minikube 网络配置](https://minikube.sigs.k8s.io/docs/handbook/accessing/)
 
 ### 相关项目
+
 - [docker-connector 主项目](https://github.com/wenjunxiao/mac-docker-connector)
 - [Lima 文档](https://github.com/lima-vm/lima)
 
 ### 工具文档
+
 - [iptables 教程](https://www.netfilter.org/documentation/HOWTO/packet-filtering-HOWTO.html)
 - [tcpdump 使用指南](https://www.tcpdump.org/manpages/tcpdump.1.html)
 
@@ -497,6 +509,7 @@ sudo tcpdump -i tun0 -nn                # 抓包分析
 3. ✅ 验证访问：`curl http://<container_ip>`
 
 **遇到问题？**
+
 - 📖 查看[故障排查](#-故障排查)章节
 - 🔍 运行 `sudo ./setup-docker-network.sh -v` 查看详情
 - 💬 [提交 Issue](https://github.com/wenjunxiao/mac-docker-connector/issues) 获取帮助
