@@ -185,6 +185,72 @@ check_docker_iptables_config() {
     echo ""
 }
 
+# 检查并配置 hostname 到 /etc/hosts
+check_hostname_in_hosts() {
+    log_info "==========================================="
+    log_info "🔍 检查 hostname 配置"
+    log_info "==========================================="
+    echo ""
+    
+    local hostname=$(hostname)
+    local hosts_file="/etc/hosts"
+    
+    if [ -z "$hostname" ]; then
+        log_error "无法获取主机名"
+        return 1
+    fi
+    
+    log_info "当前主机名: $hostname"
+    
+    # 检查 /etc/hosts 是否存在
+    if [ ! -f "$hosts_file" ]; then
+        log_error "/etc/hosts 文件不存在"
+        return 1
+    fi
+    
+    # 检查 hostname 是否已在 /etc/hosts 中
+    if grep -qE "^127\.0\.0\.1[[:space:]]+.*[[:space:]]${hostname}([[:space:]]|$)" "$hosts_file" || \
+       grep -qE "^127\.0\.0\.1[[:space:]]+${hostname}([[:space:]]|$)" "$hosts_file"; then
+        log_info "✅ hostname 已存在于 /etc/hosts 中"
+    else
+        log_warn "⚠️  hostname 不在 /etc/hosts 中，正在添加..."
+        
+        # 备份 /etc/hosts
+        sudo cp "$hosts_file" "${hosts_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        log_info "已备份 /etc/hosts 到: ${hosts_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        
+        # 检查是否已有 127.0.0.1 localhost 行
+        if grep -q "^127\.0\.0\.1[[:space:]]" "$hosts_file"; then
+            # 在现有的 127.0.0.1 行后添加 hostname（如果该行还没有 hostname）
+            local localhost_line=$(grep "^127\.0\.0\.1[[:space:]]" "$hosts_file" | head -n 1)
+            if ! echo "$localhost_line" | grep -qE "[[:space:]]${hostname}([[:space:]]|$)"; then
+                # 在 127.0.0.1 行末尾添加 hostname
+                sudo sed -i "s/^127\.0\.0\.1[[:space:]].*/& ${hostname}/" "$hosts_file"
+                log_info "✅ 已将 hostname 添加到现有的 127.0.0.1 行"
+            fi
+        else
+            # 没有 127.0.0.1 行，添加新行
+            echo "127.0.0.1 localhost ${hostname}" | sudo tee -a "$hosts_file" > /dev/null
+            log_info "✅ 已添加新的 127.0.0.1 行包含 hostname"
+        fi
+        
+        # 验证添加结果
+        if grep -qE "^127\.0\.0\.1[[:space:]]+.*[[:space:]]${hostname}([[:space:]]|$)" "$hosts_file" || \
+           grep -qE "^127\.0\.0\.1[[:space:]]+${hostname}([[:space:]]|$)" "$hosts_file"; then
+            log_info "✅ hostname 配置验证通过"
+        else
+            log_error "❌ hostname 配置验证失败"
+            return 1
+        fi
+    fi
+    
+    echo ""
+    log_info "==========================================="
+    log_info "✅ hostname 配置检查完成"
+    log_info "==========================================="
+    echo ""
+}
+
 # 检查规则是否存在
 rule_exists() {
     local table="$1"
@@ -582,6 +648,18 @@ EOF
                     # 显示当前 DNS 配置
                     log_debug "当前 DNS 服务器:"
                     resolvectl status 2>/dev/null | grep "DNS Servers" | head -n 1 | sed 's/^/  /'
+                    
+                    # 验证 DNS 解析
+                    log_info "验证 Kubernetes DNS 解析..."
+                    if command -v nslookup &> /dev/null; then
+                        if nslookup kubernetes.default.svc.cluster.local "$dns_ip" &> /dev/null; then
+                            log_info "✅ DNS 解析验证成功: kubernetes.default.svc.cluster.local"
+                        else
+                            log_warn "⚠️  DNS 解析验证失败，可能需要等待 DNS 服务完全启动"
+                        fi
+                    else
+                        log_debug "nslookup 命令不可用，跳过 DNS 解析验证"
+                    fi
                 else
                     log_error "systemd-resolved 服务启动失败"
                 fi
@@ -593,6 +671,18 @@ EOF
         fi
     else
         log_info "✅ DNS 配置无需更新"
+        
+        # 即使配置未更新，也验证 DNS 解析
+        log_info "验证 Kubernetes DNS 解析..."
+        if command -v nslookup &> /dev/null; then
+            if nslookup kubernetes.default.svc.cluster.local "$dns_ip" &> /dev/null; then
+                log_info "✅ DNS 解析验证成功: kubernetes.default.svc.cluster.local"
+            else
+                log_warn "⚠️  DNS 解析验证失败"
+            fi
+        else
+            log_debug "nslookup 命令不可用，跳过 DNS 解析验证"
+        fi
     fi
     
     echo ""
@@ -841,6 +931,9 @@ main() {
     
     # ⚠️ 关键步骤：检查 Docker iptables 配置（必须在最前面）
     check_docker_iptables_config
+    
+    # 检查并配置 hostname
+    check_hostname_in_hosts
     
     # 启用 IP 转发
     if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then

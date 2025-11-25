@@ -14,12 +14,15 @@ sudo ./setup-docker-network.sh
 
 **脚本会自动完成所有配置**，包括：
 
+- ✅ Docker iptables 配置检查与修复
+- ✅ Hostname 配置到 /etc/hosts（幂等操作）
 - ✅ Docker 容器访问外网
 - ✅ 宿主机直接访问容器 IP
 - ✅ Kubernetes Pod/Service 直接访问
-- ✅ DNS 解析（支持 `.cluster.local` 域名）
+- ✅ DNS 解析（支持 `.cluster.local` 域名，自动配置 systemd-resolved）
+- ✅ DNS 解析验证（nslookup kubernetes.default.svc.cluster.local）
 
-> 💡 **提示**：首次运行需要 5-10 秒，之后重启也能自动恢复配置
+> 💡 **提示**：首次运行需要 5-10 秒，之后重启也能自动恢复配置。所有配置都支持幂等操作，重复运行不会产生副作用
 
 ---
 

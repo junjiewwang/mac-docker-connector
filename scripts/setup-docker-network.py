@@ -24,6 +24,7 @@ class Config:
     DAEMON_JSON_PATH = Path("/etc/docker/daemon.json")
     DNS_CONF_DIR = Path("/etc/systemd/resolved.conf.d")
     DNS_CONF_FILE = DNS_CONF_DIR / "minikube-dns.conf"
+    HOSTS_FILE = Path("/etc/hosts")
     REQUIRED_COMMANDS = ['docker', 'iptables', 'ip']
     IPTABLES_TABLES = ['filter', 'nat']
 
@@ -251,6 +252,105 @@ class DockerConfigManager:
         except Exception as e:
             Logger.error(f"❌ 配置验证失败: {e}")
             sys.exit(1)
+
+# ==================== Hostname 配置管理 ====================
+
+class HostnameConfigManager:
+    """Hostname 配置管理器"""
+    
+    @classmethod
+    def check_and_configure_hostname(cls) -> bool:
+        """检查并配置 hostname 到 /etc/hosts"""
+        Logger.section("🔍 检查 hostname 配置")
+        
+        try:
+            hostname = subprocess.run(['hostname'], capture_output=True, text=True, check=True).stdout.strip()
+            if not hostname:
+                Logger.error("无法获取主机名")
+                return False
+            
+            Logger.info(f"当前主机名: {hostname}")
+            
+            hosts_file = Config.HOSTS_FILE
+            if not hosts_file.exists():
+                Logger.error(f"{hosts_file} 文件不存在")
+                return False
+            
+            # 检查 hostname 是否已在 /etc/hosts 中
+            with open(hosts_file, 'r') as f:
+                content = f.read()
+            
+            # 使用正则表达式检查 hostname 是否存在
+            pattern = rf'^127\.0\.0\.1\s+.*\s+{re.escape(hostname)}(\s|$)'
+            pattern2 = rf'^127\.0\.0\.1\s+{re.escape(hostname)}(\s|$)'
+            
+            if re.search(pattern, content, re.MULTILINE) or re.search(pattern2, content, re.MULTILINE):
+                Logger.info("✅ hostname 已存在于 /etc/hosts 中")
+            else:
+                Logger.warn("⚠️  hostname 不在 /etc/hosts 中，正在添加...")
+                cls._add_hostname_to_hosts(hostname, hosts_file)
+            
+            Logger.section("✅ hostname 配置检查完成")
+            return True
+            
+        except Exception as e:
+            Logger.error(f"❌ hostname 配置失败: {e}")
+            return False
+    
+    @classmethod
+    def _add_hostname_to_hosts(cls, hostname: str, hosts_file: Path):
+        """添加 hostname 到 /etc/hosts"""
+        try:
+            # 备份 /etc/hosts
+            backup_path = f"{hosts_file}.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            CommandExecutor.run_sudo(['cp', str(hosts_file), backup_path])
+            Logger.info(f"已备份 /etc/hosts 到: {backup_path}")
+            
+            with open(hosts_file, 'r') as f:
+                lines = f.readlines()
+            
+            # 检查是否已有 127.0.0.1 行
+            localhost_line_idx = -1
+            for idx, line in enumerate(lines):
+                if re.match(r'^127\.0\.0\.1\s+', line):
+                    localhost_line_idx = idx
+                    break
+            
+            if localhost_line_idx >= 0:
+                # 在现有的 127.0.0.1 行末尾添加 hostname
+                line = lines[localhost_line_idx].rstrip()
+                if not re.search(rf'\s+{re.escape(hostname)}(\s|$)', line):
+                    lines[localhost_line_idx] = f"{line} {hostname}\n"
+                    Logger.info("✅ 已将 hostname 添加到现有的 127.0.0.1 行")
+            else:
+                # 没有 127.0.0.1 行，添加新行
+                lines.append(f"127.0.0.1 localhost {hostname}\n")
+                Logger.info("✅ 已添加新的 127.0.0.1 行包含 hostname")
+            
+            # 写入文件
+            temp_file = f"{hosts_file}.tmp"
+            with open(temp_file, 'w') as f:
+                f.writelines(lines)
+            
+            CommandExecutor.run_sudo(['mv', temp_file, str(hosts_file)])
+            CommandExecutor.run_sudo(['chmod', '644', str(hosts_file)])
+            
+            # 验证添加结果
+            with open(hosts_file, 'r') as f:
+                content = f.read()
+            
+            pattern = rf'^127\.0\.0\.1\s+.*\s+{re.escape(hostname)}(\s|$)'
+            pattern2 = rf'^127\.0\.0\.1\s+{re.escape(hostname)}(\s|$)'
+            
+            if re.search(pattern, content, re.MULTILINE) or re.search(pattern2, content, re.MULTILINE):
+                Logger.info("✅ hostname 配置验证通过")
+            else:
+                Logger.error("❌ hostname 配置验证失败")
+                return False
+            
+        except Exception as e:
+            Logger.error(f"❌ 添加 hostname 失败: {e}")
+            raise
 
 # ==================== iptables 规则管理 ====================
 
@@ -732,10 +832,36 @@ Domains=cluster.local
             result = CommandExecutor.run(['systemctl', 'is-active', 'systemd-resolved'], check=False)
             if result.returncode == 0:
                 Logger.info("✅ DNS 配置已生效")
+                
+                # 验证 DNS 解析
+                Logger.info("验证 Kubernetes DNS 解析...")
+                self._verify_dns_resolution(dns_ip)
             else:
                 Logger.error("systemd-resolved 服务启动失败")
         else:
             Logger.info("✅ DNS 配置无需更新")
+            
+            # 即使配置未更新，也验证 DNS 解析
+            Logger.info("验证 Kubernetes DNS 解析...")
+            self._verify_dns_resolution(dns_ip)
+    
+    def _verify_dns_resolution(self, dns_ip: str):
+        """验证 DNS 解析"""
+        if not CommandExecutor.command_exists('nslookup'):
+            Logger.debug("nslookup 命令不可用，跳过 DNS 解析验证")
+            return
+        
+        try:
+            result = CommandExecutor.run(
+                ['nslookup', 'kubernetes.default.svc.cluster.local', dns_ip],
+                check=False
+            )
+            if result.returncode == 0:
+                Logger.info("✅ DNS 解析验证成功: kubernetes.default.svc.cluster.local")
+            else:
+                Logger.warn("⚠️  DNS 解析验证失败，可能需要等待 DNS 服务完全启动")
+        except Exception as e:
+            Logger.warn(f"⚠️  DNS 解析验证失败: {e}")
     
     def configure_bridges_to_minikube(self):
         """配置其他 Docker 网桥与 Minikube 的通信"""
@@ -928,6 +1054,7 @@ class DockerNetworkSetup:
         self._check_permissions()
         
         DockerConfigManager.check_and_fix_iptables_config()
+        HostnameConfigManager.check_and_configure_hostname()
         self._enable_ip_forward()
         
         # 执行配置
