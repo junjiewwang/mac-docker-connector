@@ -382,29 +382,6 @@ sudo killall -HUP mDNSResponder
 <details>
 <summary>📚 <b>点击展开：高级配置</b></summary>
 
-### 自动化配置（开机启动）
-
-```bash
-# 创建 systemd 服务
-sudo tee /etc/systemd/system/docker-network-setup.service << 'EOF'
-[Unit]
-Description=Docker Network Setup
-After=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/path/to/setup-docker-network.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# 启用服务
-sudo systemctl enable docker-network-setup.service
-sudo systemctl start docker-network-setup.service
-```
-
 ### 自定义脚本
 
 ```bash
