@@ -9,7 +9,7 @@
 
 ```bash
 # 就这么简单！
-sudo ./setup-docker-network.sh
+sudo python3 ./setup-docker-network.py
 ```
 
 **脚本会自动完成所有配置**，包括：
@@ -82,11 +82,11 @@ curl http://172.17.0.2  # 直接访问！
 ### 方式一：自动配置（推荐 ⭐️）
 
 ```bash
-# 1. 下载脚本
-chmod +x setup-docker-network.sh
+# 1. 确保有 Python3
+python3 --version
 
 # 2. 运行（需要 sudo）
-sudo ./setup-docker-network.sh
+sudo python3 ./setup-docker-network.py
 
 # 3. 验证
 docker run -d nginx
@@ -98,10 +98,10 @@ curl http://<container_ip>  # 成功！🎉
 
 ```bash
 # 查看详细配置信息
-sudo ./setup-docker-network.sh -v
+sudo python3 ./setup-docker-network.py -v
 
 # 查看帮助
-sudo ./setup-docker-network.sh --help
+python3 ./setup-docker-network.py --help
 ```
 
 ---
@@ -177,7 +177,7 @@ minikube start \
   --service-cluster-ip-range='10.96.0.0/16'
 
 # 运行配置脚本
-sudo ./setup-docker-network.sh
+sudo python3 ./setup-docker-network.py
 
 # 验证
 kubectl get svc
@@ -257,7 +257,7 @@ sudo tcpdump -i tun0 -nn host <container_ip>
 | 问题                | 可能原因                 | 解决方案                                |
 |-------------------|----------------------|-------------------------------------|
 | 🚫 无法访问容器         | Docker iptables 配置错误 | 设置 `"iptables": false` 并重启 Docker   |
-| 🚫 容器无法访问外网       | 缺少 NAT 规则            | 运行 `sudo ./setup-docker-network.sh` |
+| 🚫 容器无法访问外网       | 缺少 NAT 规则            | 运行 `sudo ./setup-docker-network.py` |
 | 🚫 DNS 解析失败       | DNS 配置未生效            | 重启 `systemd-resolved` 服务            |
 | 🚫 Minikube 重启后失效 | IP 地址变化              | 重新运行配置脚本                            |
 | 同子网容器之间网络不通       | 防火墙阻拦                | 关闭防火墙                               |
@@ -342,7 +342,7 @@ sudo killall -HUP mDNSResponder
 1. **使用自动化脚本**
    ```bash
    # 定期运行检查配置
-   sudo ./setup-docker-network.sh
+   sudo ./setup-docker-network.py
    ```
 
 2. **选择不冲突的网段**
@@ -382,24 +382,24 @@ sudo killall -HUP mDNSResponder
 <details>
 <summary>📚 <b>点击展开：高级配置</b></summary>
 
-### 自定义脚本
+### 自定义配置
 
 ```bash
-# 编辑脚本
-vim setup-docker-network.sh
+# 使用 --only 指定链路
+sudo python3 ./setup-docker-network.py apply --only internet,host-docker
 
-# 可自定义的变量
-PHYSICAL_IF="eth0"        # 物理网卡名称
-LOG_LEVEL="INFO"          # 日志级别
-SKIP_TUN0=false          # 跳过 tun0 配置
-SKIP_MINIKUBE=false      # 跳过 Minikube 配置
+# 使用 --skip 跳过链路
+sudo python3 ./setup-docker-network.py apply --skip docker-docker
+
+# 细粒度子层级控制
+sudo python3 ./setup-docker-network.py apply --only host-k8s.service
 ```
 
 ### 网络拓扑可视化
 
 ```bash
 # 生成网络拓扑图
-sudo ./setup-docker-network.sh -v
+sudo ./setup-docker-network.py -v
 
 # 查看详细的 iptables 规则
 sudo iptables -L -n -v --line-numbers
@@ -446,8 +446,10 @@ ip route show table all
 
 ```bash
 # === 脚本相关 ===
-sudo ./setup-docker-network.sh          # 运行配置
-sudo ./setup-docker-network.sh -v       # 详细模式
+sudo python3 ./setup-docker-network.py              # 应用所有配置
+sudo python3 ./setup-docker-network.py status        # 查看状态
+sudo python3 ./setup-docker-network.py revert        # 还原配置
+sudo python3 ./setup-docker-network.py -v            # 详细模式
 
 # === Docker 相关 ===
 docker network ls                        # 查看网络
@@ -485,13 +487,13 @@ sudo tcpdump -i tun0 -nn                # 抓包分析
 **三步搞定网络配置**：
 
 1. 🔧 配置 Docker：`"iptables": false`
-2. 🚀 运行脚本：`sudo ./setup-docker-network.sh`
+2. 🚀 运行脚本：`sudo python3 ./setup-docker-network.py`
 3. ✅ 验证访问：`curl http://<container_ip>`
 
 **遇到问题？**
 
 - 📖 查看[故障排查](#-故障排查)章节
-- 🔍 运行 `sudo ./setup-docker-network.sh -v` 查看详情
+- 🔍 运行 `sudo ./setup-docker-network.py -v` 查看详情
 - 💬 [提交 Issue](https://github.com/wenjunxiao/mac-docker-connector/issues) 获取帮助
 
 ---
