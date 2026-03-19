@@ -159,6 +159,9 @@ func (c *Connector) run() {
 	defer conn.Close()
 	logger.Infof("[UDP LISTENER] Successfully listening on %v", conn.LocalAddr())
 
+	// 启动 HTTP Dashboard (TCP 同端口，与 UDP 互不冲突)
+	go startDashboard()
+
 	// 输出网络接口状态
 	if iface != nil {
 		logger.Infof("[TUN INTERFACE] TUN interface created: %s", iface.Name())
