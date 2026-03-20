@@ -89,6 +89,35 @@ flowchart TD
 - **修复按钮**：检测到 MISSING 时显示"一键修复"按钮
 - **自动刷新**：每 5 秒轮询
 
+### Phase 1.5 — 前端优化（无闪烁差量更新）
+
+**问题**：Phase 1 的 `render()` 每次用 `innerHTML` 重建整个 DOM，导致全页面闪烁、动画重播、滚动位置丢失。
+
+**解决方案**：骨架+差量更新架构
+
+```mermaid
+flowchart LR
+    A["首次加载"] -->|"innerHTML 创建骨架"| B["DOM 骨架就位"]
+    B --> C["填充数据到 DOM 节点"]
+    C --> D["5秒后获取新数据"]
+    D -->|"差量更新<br/>只改变文本/属性"| E["DOM 原地更新"]
+    E --> D
+```
+
+**优化项**：
+
+| 优化 | 说明 |
+|------|------|
+| 差量更新 | DOM 只创建一次骨架，后续只更新变化的 `textContent` |
+| 值变化高亮 | 数据变化时蓝色闪烁动画（`valueFlash`） |
+| ~~行级过渡~~ | ~~路由表行状态变化时背景渐变闪烁~~ → 已移除，体验不佳 |
+| 顶部进度条 | 2px 渐变进度条，指示刷新倒计时 |
+| 骨架屏 | 首次加载显示骨架占位，数据到达后平滑切换 |
+| 修复结果持久化 | 修复操作结果跨刷新保留 |
+| 全部OK庆祝态 | 所有路由正常时显示 ✨ 庆祝横幅 |
+| 布局提升 | Hero 卡片突出关键指标 + 次要信息栏 + 更好的视觉层次 |
+| 连接状态动画 | 脉冲点 + 断开时红色指示 |
+
 ## 新增文件
 
 ```
@@ -108,6 +137,90 @@ desktop/
 | 3 | 创建 `dashboard_html.go` - 内嵌前端页面 (~280行) | ✅ 完成 |
 | 4 | 修改 `service.go` - 启动 HTTP 服务 (2行) | ✅ 完成 |
 | 5 | 编译验证 (go build 通过) | ✅ 完成 |
+| 6 | **前端优化** - 差量更新 + 骨架屏 + 进度条 + 布局提升 (~500行) | ✅ 完成 |
+| 7 | **刷新闪烁修复** - 移除 row-changed 行级闪烁动画 | ✅ 完成 |
+| 8 | **EXTRA 路由过滤** - 过滤与 conf 路由 IP 相同但掩码不同的关联路由 | ✅ 完成 |
+| 9 | **修复路由增强** - 使用 runOutCmd 捕获命令输出 + 修复后二次验证 | ✅ 完成 |
+| 10 | **netstat 缩写掩码推断修复** - 修复 `normalizeNetstatDest` 对无 `/` 缩写 IP 的掩码推断 | ✅ 完成 |
+
+### Phase 1.6 — 刷新体验优化 + EXTRA 路由过滤
+
+**问题 1**：表格每 5 秒刷新时，所有行触发 `row-changed` 闪烁动画，视觉干扰大。
+**解决**：移除 `row-changed` CSS 动画和 JS 中的触发逻辑，保留 `value-flash` 值级别高亮。
+
+**问题 2**：conf 配置 `172.17.0.0/16`，但系统路由表中存在 `/8` 或 host 路由 `172.17.0.0`，被标记为 EXTRA 造成视觉混乱。
+**解决**：后端增加 `extractIP()` 函数，在标记 EXTRA 前比对 IP 部分，如果与 conf 路由 IP 相同则跳过。
+
+```mermaid
+flowchart TD
+    SYS_ROUTE["系统路由条目"] --> IS_UTUN{"接口是 utunX？"}
+    IS_UTUN -->|否| SKIP1["跳过"]
+    IS_UTUN -->|是| IN_CONF{"destination 在 conf 中？"}
+    IN_CONF -->|是| SKIP2["已匹配，不是 EXTRA"]
+    IN_CONF -->|否| IS_PEER{"是 peer 自身路由？"}
+    IS_PEER -->|是| SKIP3["跳过"]
+    IS_PEER -->|否| IP_MATCH{"IP 部分与某个\nconf 路由 IP 相同？"}
+    IP_MATCH -->|是| SKIP4["关联路由，跳过"]
+    IP_MATCH -->|否| EXTRA["标记为 EXTRA"]
+```
+
+### Phase 1.7 — 修复路由增强（命令输出捕获 + 二次验证）
+
+**问题**：点击一键修复后，显示"成功 9 条，失败 0 条"，但路由仍然为 MISSING。`runCmd` 使用 `cmd.Run()` 不捕获 stderr，无法诊断真实失败原因。
+
+**改进**：
+
+1. **命令输出捕获**：`fixMissingRoutes` 改用 `runOutCmd`（`CombinedOutput`），捕获 stdout + stderr
+2. **失败详情展示**：错误信息包含命令实际输出（如 "route: must be root"、"already in table" 等）
+3. **二次验证**：修复完成后 200ms，重新执行 `verifyRoutes()` 检查路由是否真正生效
+4. **计数修正**：如果命令成功但路由未生效，自动修正 fixed/failed 计数，并附加 ⚠️ 警告提示
+
+```mermaid
+flowchart TD
+    FIX_START["一键修复"] --> GET_MISSING["获取所有 MISSING 路由"]
+    GET_MISSING --> LOOP["逐条执行 route -n add -net"]
+    LOOP --> CMD["runOutCmd<br/>捕获 stdout+stderr"]
+    CMD -->|"err != nil"| FAIL["❌ 记录失败<br/>含命令输出"]
+    CMD -->|"err == nil"| OK["✅ 记录成功"]
+    FAIL --> NEXT{还有下一条?}
+    OK --> NEXT
+    NEXT -->|是| LOOP
+    NEXT -->|否| VERIFY["⏱ 等待 200ms<br/>二次验证 verifyRoutes()"]
+    VERIFY --> CHECK{仍有 MISSING?}
+    CHECK -->|否| DONE["修复完成 ✅"]
+    CHECK -->|是| WARN["⚠️ 修正计数<br/>提示路由未生效"]
+```
+
+### Phase 1.8 — netstat 缩写掩码推断修复
+
+**根因**：`normalizeNetstatDest` 对于 macOS netstat 中无 `/` 后缀的缩写 IP（如 `172.17`）错误地当作 host 路由处理，导致比对时使用 `/32` 掩码，永远无法匹配 conf 中的 `/16` 路由。
+
+**macOS netstat 缩写规则**：省略尾部 `.0` 八位组
+- `172.17` = 2 个八位组 → `172.17.0.0/16`
+- `10` = 1 个八位组 → `10.0.0.0/8`
+- `192.168.1` = 3 个八位组 → `192.168.1.0/24`
+- `192.168.1.1` = 4 个八位组 → host 路由 `/32`
+
+```mermaid
+flowchart TD
+    INPUT["netstat destination<br/>例如 '172.17'"] --> HAS_SLASH{"包含 '/' ?"}
+    HAS_SLASH -->|是| EXPAND_CIDR["expandShortIP + 保留掩码<br/>'10.96/16' → '10.96.0.0/16'"]
+    HAS_SLASH -->|否| COUNT["计算八位组数"]
+    COUNT --> LT4{"< 4 个？"}
+    LT4 -->|是| INFER["推断掩码 = 八位组数 × 8<br/>'172.17' → '172.17.0.0/16'"]
+    LT4 -->|否| HOST["host 路由 /32<br/>'192.168.1.1' → '192.168.1.1'"]
+    
+    style INFER fill:#2d5a2d,stroke:#4ade80
+    style HOST fill:#5a2d2d,stroke:#f87171
+```
+
+**修复前 vs 修复后对比**：
+
+| netstat 输出 | 修复前 (bug) | 修复后 |
+|---|---|---|
+| `172.17` | `172.17.0.0` → 被当 `/32` → MISSING | `172.17.0.0/16` → 匹配 conf → OK ✅ |
+| `192.168.105` | `192.168.105.0` → 被当 `/32` | `192.168.105.0/24` ✅ |
+| `127` | `127.0.0.0` → 被当 `/32` | `127.0.0.0/8` ✅ |
 
 ## 遗留问题
 
