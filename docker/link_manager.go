@@ -38,6 +38,7 @@ type LinkStatus struct {
 type RuleDetail struct {
 	Label  string `json:"label"`
 	Active bool   `json:"active"`
+	Type   string `json:"type"` // "iptables", "route", "dns"
 }
 
 // ComputeStatus 根据 active/total 计算状态字符串
@@ -55,7 +56,12 @@ func (s *LinkStatus) ComputeStatus() {
 
 // AppendCheck 向 LinkStatus 追加一条检查结果
 func (s *LinkStatus) AppendCheck(label string, active bool) {
-	s.Details = append(s.Details, RuleDetail{Label: label, Active: active})
+	s.AppendCheckTyped(label, active, "iptables")
+}
+
+// AppendCheckTyped 向 LinkStatus 追加一条带类型的检查结果
+func (s *LinkStatus) AppendCheckTyped(label string, active bool, ruleType string) {
+	s.Details = append(s.Details, RuleDetail{Label: label, Active: active, Type: ruleType})
 	s.RulesTotal++
 	if active {
 		s.RulesActive++
@@ -283,7 +289,11 @@ func (m *LinkManager) rulesToStatus(rules []ruleInfo, st *LinkStatus) {
 				label = "NAT " + strings.Join(r.Rule[:minInt(4, len(r.Rule))], " ")
 			}
 		}
-		st.AppendCheck(label, ok)
+		ruleType := "iptables"
+		if r.Table == "nat" {
+			ruleType = "nat"
+		}
+		st.AppendCheckTyped(label, ok, ruleType)
 	}
 }
 

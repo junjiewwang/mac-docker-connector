@@ -458,6 +458,64 @@ body::after{
 .vm-offline-overlay .offline-title{font-size:1rem;font-weight:600;margin-bottom:6px}
 .vm-offline-overlay .offline-desc{font-size:0.78rem;line-height:1.6;max-width:400px}
 
+/* ===== 网络拓扑图 ===== */
+.topo-card{
+  background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius);
+  padding:20px 24px;margin-bottom:14px;
+  transition:border-color var(--transition-normal);
+}
+.topo-card:hover{border-color:rgba(99,102,241,0.15)}
+.topo-svg{
+  width:100%;max-width:900px;margin:0 auto;display:block;
+}
+.topo-zone{
+  cursor:default;transition:all var(--transition-fast);
+}
+.topo-zone:hover .topo-zone-bg{filter:brightness(1.15)}
+.topo-zone-bg{
+  rx:14;ry:14;stroke-width:1.5;
+  transition:all var(--transition-fast);
+}
+.topo-zone-icon{font-size:22px}
+.topo-zone-label{
+  font-family:var(--font-sans);font-size:13px;font-weight:600;
+  fill:var(--text-primary);
+}
+.topo-zone-sub{
+  font-family:var(--font-mono);font-size:10px;
+  fill:var(--text-muted);
+}
+.topo-link{
+  stroke-width:2.5;fill:none;stroke-linecap:round;
+  transition:stroke 0.4s ease, opacity 0.4s ease;
+}
+.topo-link.active{stroke:var(--accent-green);opacity:1}
+.topo-link.partial{stroke:var(--accent-amber);opacity:0.85;stroke-dasharray:8 4}
+.topo-link.inactive{stroke:var(--text-muted);opacity:0.3;stroke-dasharray:4 4}
+.topo-link-label{
+  font-family:var(--font-mono);font-size:9.5px;font-weight:600;
+  transition:fill 0.4s ease;
+}
+.topo-link-label.active{fill:var(--accent-green)}
+.topo-link-label.partial{fill:var(--accent-amber)}
+.topo-link-label.inactive{fill:var(--text-muted)}
+.topo-link-hit{
+  stroke:transparent;stroke-width:16;fill:none;cursor:pointer;
+}
+.topo-legend{
+  display:flex;gap:16px;justify-content:center;margin-top:12px;
+}
+.topo-legend-item{
+  display:flex;align-items:center;gap:5px;
+  font-family:var(--font-mono);font-size:0.68rem;color:var(--text-muted);
+}
+.topo-legend-dot{
+  width:10px;height:3px;border-radius:2px;
+}
+.topo-legend-dot.active{background:var(--accent-green)}
+.topo-legend-dot.partial{background:var(--accent-amber)}
+.topo-legend-dot.inactive{background:var(--text-muted)}
+
 /* ===== 响应式 ===== */
 @media(max-width:1024px){
   .hero-stats{grid-template-columns:repeat(2,1fr)}
@@ -639,10 +697,78 @@ body::after{
         </div>
         <!-- VM 在线时显示 -->
         <div id="vmOnlineContent" style="display:none">
+          <!-- 网络拓扑图 -->
+          <div class="topo-card">
+            <div class="section-header">
+              <span class="section-title"><span class="section-icon">&#x1f5fa;</span> Network Topology</span>
+              <span class="vm-indicator online" id="vmStatusBadge"><span class="vm-dot online"></span>connected</span>
+            </div>
+            <svg class="topo-svg" viewBox="0 0 800 400" id="topoSvg">
+              <defs>
+                <filter id="glow"><feGaussianBlur stdDeviation="3" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--accent-green)" opacity="0.6"/></marker>
+                <marker id="arrowAmber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--accent-amber)" opacity="0.6"/></marker>
+                <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--text-muted)" opacity="0.4"/></marker>
+              </defs>
+              <!-- 链路连线（底层） -->
+              <g id="topoLinks">
+                <!-- internet: Docker ↔ Internet -->
+                <path id="topo-link-internet" class="topo-link inactive" d="M540,120 Q680,60 700,200"/>
+                <path class="topo-link-hit" d="M540,120 Q680,60 700,200" onclick="vmLinkDetail('internet')"/>
+                <text id="topo-label-internet" class="topo-link-label inactive" x="650" y="100" text-anchor="middle">internet</text>
+                <!-- host-docker: Host ↔ Docker -->
+                <path id="topo-link-host-docker" class="topo-link inactive" d="M250,200 L420,120"/>
+                <path class="topo-link-hit" d="M250,200 L420,120" onclick="vmLinkDetail('host-docker')"/>
+                <text id="topo-label-host-docker" class="topo-link-label inactive" x="325" y="145" text-anchor="middle">host-docker</text>
+                <!-- host-k8s: Host ↔ K8s -->
+                <path id="topo-link-host-k8s" class="topo-link inactive" d="M250,240 L420,300"/>
+                <path class="topo-link-hit" d="M250,240 L420,300" onclick="vmLinkDetail('host-k8s.service')"/>
+                <text id="topo-label-host-k8s" class="topo-link-label inactive" x="320" y="285" text-anchor="middle">host-k8s</text>
+                <!-- docker-k8s: Docker ↔ K8s -->
+                <path id="topo-link-docker-k8s" class="topo-link inactive" d="M500,160 L500,260"/>
+                <path class="topo-link-hit" d="M500,160 L500,260" onclick="vmLinkDetail('docker-k8s.service')"/>
+                <text id="topo-label-docker-k8s" class="topo-link-label inactive" x="528" y="215" text-anchor="start">docker-k8s</text>
+                <!-- docker-docker: Docker ↔ Docker -->
+                <path id="topo-link-docker-docker" class="topo-link inactive" d="M520,90 C580,50 620,50 570,110"/>
+                <path class="topo-link-hit" d="M520,90 C580,50 620,50 570,110" onclick="vmLinkDetail('docker-docker')"/>
+                <text id="topo-label-docker-docker" class="topo-link-label inactive" x="590" y="62" text-anchor="start">docker-docker</text>
+              </g>
+              <!-- 域节点 -->
+              <g class="topo-zone" id="topoZoneHost">
+                <rect class="topo-zone-bg" x="80" y="160" width="170" height="100" fill="#15151e" stroke="var(--accent-blue)" stroke-opacity="0.4"/>
+                <text class="topo-zone-icon" x="165" y="200" text-anchor="middle" fill="var(--text-primary)">&#x1f5a5;</text>
+                <text class="topo-zone-label" x="165" y="224" text-anchor="middle">Host (macOS)</text>
+                <text class="topo-zone-sub" x="165" y="242" text-anchor="middle" id="topoHostSub">via tun0 tunnel</text>
+              </g>
+              <g class="topo-zone" id="topoZoneDocker">
+                <rect class="topo-zone-bg" x="400" y="70" width="170" height="100" fill="#15151e" stroke="var(--accent-cyan)" stroke-opacity="0.4"/>
+                <text class="topo-zone-icon" x="485" y="108" text-anchor="middle" fill="var(--text-primary)">&#x1f433;</text>
+                <text class="topo-zone-label" x="485" y="132" text-anchor="middle">Docker</text>
+                <text class="topo-zone-sub" x="485" y="150" text-anchor="middle" id="topoDockerSub">bridge networks</text>
+              </g>
+              <g class="topo-zone" id="topoZoneK8s">
+                <rect class="topo-zone-bg" x="400" y="250" width="170" height="100" fill="#15151e" stroke="var(--accent-purple)" stroke-opacity="0.4"/>
+                <text class="topo-zone-icon" x="485" y="290" text-anchor="middle" fill="var(--text-primary)">&#x2638;</text>
+                <text class="topo-zone-label" x="485" y="314" text-anchor="middle">Kubernetes</text>
+                <text class="topo-zone-sub" x="485" y="332" text-anchor="middle" id="topoK8sSub">minikube</text>
+              </g>
+              <g class="topo-zone" id="topoZoneInternet">
+                <rect class="topo-zone-bg" x="660" y="160" width="120" height="100" fill="#15151e" stroke="var(--accent-green)" stroke-opacity="0.4"/>
+                <text class="topo-zone-icon" x="720" y="200" text-anchor="middle" fill="var(--text-primary)">&#x1f310;</text>
+                <text class="topo-zone-label" x="720" y="224" text-anchor="middle">Internet</text>
+                <text class="topo-zone-sub" x="720" y="242" text-anchor="middle" id="topoInternetSub">NAT masquerade</text>
+              </g>
+            </svg>
+            <div class="topo-legend">
+              <div class="topo-legend-item"><div class="topo-legend-dot active"></div>Active</div>
+              <div class="topo-legend-item"><div class="topo-legend-dot partial"></div>Partial</div>
+              <div class="topo-legend-item"><div class="topo-legend-dot inactive"></div>Inactive</div>
+            </div>
+          </div>
+
           <div class="section-card" style="margin-bottom:14px">
             <div class="section-header">
               <span class="section-title"><span class="section-icon">&#x1f517;</span> VM Link Status</span>
-              <span class="vm-indicator online" id="vmStatusBadge"><span class="vm-dot online"></span>connected</span>
             </div>
             <div class="vm-links-grid" id="vmLinksGrid">
               <!-- JS 动态填充 -->
@@ -1057,11 +1183,48 @@ body::after{
     }
   }
 
+  // 更新拓扑图链路状态
+  function updateTopoLinks(links) {
+    if (!links || links.length === 0) return;
+    // 构建 name → status 映射，合并子链路状态
+    const statusMap = {};
+    for (const link of links) {
+      // 解析名称："host-k8s.service" → base = "host-k8s"
+      const dot = link.name.indexOf('.');
+      const base = dot >= 0 ? link.name.substring(0, dot) : link.name;
+      const s = link.status || 'inactive';
+      if (!statusMap[base]) {
+        statusMap[base] = s;
+      } else {
+        // 合并：active+active=active, 否则取最差状态
+        const prio = {active:0, partial:1, inactive:2};
+        const cur = prio[statusMap[base]] || 2;
+        const nxt = prio[s] || 2;
+        if (nxt > cur) statusMap[base] = s;
+      }
+    }
+    // 更新 SVG 链路元素
+    const linkNames = ['internet','host-docker','host-k8s','docker-k8s','docker-docker'];
+    for (const name of linkNames) {
+      const st = statusMap[name] || 'inactive';
+      const pathEl = $('topo-link-' + name);
+      const labelEl = $('topo-label-' + name);
+      if (pathEl) {
+        pathEl.className.baseVal = 'topo-link ' + st;
+      }
+      if (labelEl) {
+        labelEl.className.baseVal = 'topo-link-label ' + st;
+      }
+    }
+  }
+
   // 渲染 VM 链路卡片
   function renderVMLinks(data) {
     const grid = $('vmLinksGrid');
     if (!grid) return;
     const links = data.links || [];
+    // 更新拓扑图
+    updateTopoLinks(links);
     if (links.length === 0) {
       grid.innerHTML = '<div class="empty-state">暂无链路数据</div>';
       return;
@@ -1175,7 +1338,7 @@ body::after{
       const statusCls = d.active ? 'ok' : 'missing';
       const statusText = d.active ? 'ACTIVE' : 'MISSING';
       tr.innerHTML =
-        '<td>' + esc(d.description || d.rule || '--') + '</td>' +
+        '<td>' + esc(d.label || '--') + '</td>' +
         '<td><span class="status-badge ' + statusCls + '"><span class="status-dot ' + statusCls + '"></span>' + statusText + '</span></td>' +
         '<td>' + esc(d.type || 'iptables') + '</td>';
       tbody.appendChild(tr);
