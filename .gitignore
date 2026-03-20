@@ -27,6 +27,8 @@ accessor/docker-accessor*.tar.gz
 accessor/docker-accessor*.zip
 accessor/docker-accessor-*-sha256.txt
 tmp/
+build/
+desktop/bin/
 .DS_Store
 
 .idea

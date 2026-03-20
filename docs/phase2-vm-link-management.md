@@ -1007,6 +1007,105 @@ graph LR
 | `/api/links` 缓存命中 | ~27s（缓存 5s 后过期重来） | <50ms（缓存 60s） | **-99.8%** |
 | kubectl 调用次数 | 每次 8 次，无论成功失败 | 启动检查 1 次，失败后 0 次 | **-100%** |
 
+### BF-007: Dashboard VM Link 规则详情显示为空（字段名不匹配）
+
+**现象**: 点击 VM Link 卡片的 "Details" 后，RULE 列全部显示为 `—`（破折号），无法看到具体规则。
+
+**根因**: 前端 `renderVMLinkDetails` 函数中使用 `d.description || d.rule` 读取规则名，但后端 `RuleDetail` 结构体的 JSON 字段名是 `"label"`。字段名不匹配导致全部回退为默认值 `--`。
+
+```mermaid
+sequenceDiagram
+    participant VM as VM HTTP API
+    participant Desktop as Desktop Proxy
+    participant UI as Dashboard JS
+
+    VM->>Desktop: GET /api/vm/links → /api/links
+    Desktop->>UI: {"links":[{..., "details":[{"label":"FORWARD br-xxx → eth0", "active":true}]}]}
+    Note over UI: 🐛 d.description → undefined<br/>d.rule → undefined<br/>显示 "--"
+    Note over UI: ✅ 修复后: d.label → "FORWARD br-xxx → eth0"
+```
+
+**修复方案**:
+1. 前端 `renderVMLinkDetails`: `d.description || d.rule` → `d.label`
+2. 后端 `RuleDetail` 增加 `Type` 字段（`"iptables"` / `"nat"` / `"route"` / `"dns"`），让规则详情能区分类型
+3. `AppendCheckTyped()` 新方法，支持带类型参数的规则追加
+
+### Feature: VM Link 网络拓扑可视化图
+
+在 Dashboard VM Links 面板中新增 **Network Topology** SVG 拓扑图，直观展示 4 个域节点和 5 条链路关系：
+
+```mermaid
+graph LR
+    Host["🖥 Host (macOS)<br/>via tun0 tunnel"] --- Docker["🐳 Docker<br/>bridge networks"]
+    Host --- K8s["☸ Kubernetes<br/>minikube"]
+    Docker --- K8s
+    Docker --- Internet["🌐 Internet<br/>NAT masquerade"]
+    Docker -.->|docker-docker| Docker
+```
+
+- 链路颜色随状态实时变化：🟢 Active / 🟡 Partial / ⚪ Inactive
+- 点击链路线可查看该链路的规则详情
+- 包含图例说明
+
+### BF-008: docker-docker 链路 Apply 后入站规则显示 MISSING（缓存子串误匹配）
+
+**现象**：docker-docker 链路 Apply 后，每个网桥的第 3 条规则（入站 `RELATED,ESTABLISHED`）始终显示 **MISSING**，前 2 条（自身转发 + 出站）正常显示 ACTIVE。
+
+**根因**：`infra_iptables.go` 中 `ruleExistsInCache()` 使用 `strings.Contains()` 进行子串匹配，导致入站规则被误判为"已存在"而跳过添加。
+
+具体来说：
+- 入站规则：`-o br-xxx -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT`（**不带** `-i`）
+- 其他链路已创建的规则：`-i br-yyy -o br-xxx -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT`（**带** `-i br-yyy`）
+
+后者**包含**前者作为子串，`strings.Contains()` 匹配成功 → 误判为已存在 → 跳过 `iptables -A` → Apply 完成后实际未添加规则 → Status 用 `iptables -C` 精确检查 → MISSING。
+
+**冲突流程**：
+
+```mermaid
+sequenceDiagram
+    participant Cache as iptables -S 缓存
+    participant Commit as Commit() 批量添加
+    participant IPT as iptables (FORWARD 链)
+
+    Note over Cache,IPT: 缓存中已有其他链路的规则
+    Cache->>Cache: 加载缓存：iptables -S FORWARD<br/>包含 "-A FORWARD -i br-yyy -o br-xxx<br/>-m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+
+    Note over Commit,IPT: docker-docker Apply 入站规则
+    Commit->>Cache: ruleExistsInCache?<br/>查找 "-o br-xxx -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+    Cache->>Commit: strings.Contains() = true ❌<br/>(子串匹配到了带 -i 前缀的其他规则)
+    Note over Commit: 误判为"已存在"→ 跳过添加
+
+    Note over Commit,IPT: Status 检查
+    Commit->>IPT: iptables -C FORWARD<br/>-o br-xxx -m conntrack --ctstate ... -j ACCEPT
+    IPT->>Commit: Bad rule ❌<br/>(精确匹配：规则不存在)
+    Note over Commit: 显示 MISSING
+```
+
+**为什么只有入站规则受影响？**
+
+| 规则 | 格式 | 是否为其他规则的子串？ |
+|------|------|----------------------|
+| `-i br -o br` (自身转发) | 含 `-i` 和 `-o` | ❌ 独特组合，不会误匹配 |
+| `-i br ... ESTABLISHED` (出站) | 含 `-i` | ❌ 不是子串 |
+| **`-o br ... ESTABLISHED` (入站)** | **不含 `-i`** | **⚠️ 是其他带 `-i` 规则的子串！** |
+
+**修复**：
+
+1. **主修复**（`infra_iptables.go`）：将 `ruleExistsInCache()` 从 `strings.Contains()` 子串匹配改为**逐行精确匹配**。构造完整行格式 `-A CHAIN rule...` 再与缓存逐行对比，确保不会误匹配到包含更多参数的其他规则。
+
+2. **附带修复**（5 个链路文件）：将 `-m state --state` 统一替换为 `-m conntrack --ctstate`，与 Docker daemon 规则格式保持一致（`-m state` 在 Linux 内核中已被标记为 deprecated）。
+
+| 文件 | 修改内容 |
+|------|---------|
+| `infra_iptables.go` | `ruleExistsInCache()` 从 `strings.Contains` → 逐行精确匹配 |
+| `link_docker_docker.go` | 2 处 `-m state --state` → `-m conntrack --ctstate` |
+| `link_host_docker.go` | 1 处 |
+| `link_docker_k8s.go` | 1 处 |
+| `link_internet.go` | 1 处 |
+| `link_host_k8s.go` | 1 处 |
+
+**验证结果**：Revert → Apply 后 docker-docker 链路 **12/12 rules active** ✅，5 秒后仍稳定。
+
 ## 十三、遗留问题
 
 - [ ] Phase 3: 自动修复 + 定时校验告警
