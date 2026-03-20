@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -93,6 +95,7 @@ type SystemRoute struct {
 var (
 	dashboardStartTime time.Time
 	dashboardOnce      sync.Once
+	vmHTTPPort         = 2522 // VM 端 HTTP API 端口
 )
 
 // startDashboard 启动 HTTP Dashboard 服务
@@ -109,6 +112,9 @@ func startDashboard() {
 		mux.HandleFunc("/api/status", handleAPIStatus)
 		mux.HandleFunc("/api/routes/verify", handleAPIRoutesVerify)
 		mux.HandleFunc("/api/routes/fix", handleAPIRoutesFix)
+
+		// VM 反向代理 — /api/vm/* → http://peerIP:2522/api/*
+		registerVMProxy(mux)
 
 		listenAddr := fmt.Sprintf("%s:%d", host, port)
 		logger.Infof("[DASHBOARD] Starting HTTP Dashboard on http://%s", listenAddr)
@@ -331,12 +337,28 @@ func verifyRoutes() RouteVerifyResult {
 	}
 
 	// 6. 检查系统中有但 conf 中没有的路由（仅限 utun 接口）
+	// 预处理 conf 路由的 IP 部分（去掉掩码），用于过滤关联路由
+	confIPs := make(map[string]bool)
+	for network := range confRoutes {
+		ip := extractIP(network)
+		if ip != "" {
+			confIPs[ip] = true
+		}
+	}
+
 	if result.TUNInterface != "" {
 		for _, sysRoute := range sysRoutes {
 			if sysRoute.Interface == result.TUNInterface {
 				if _, ok := confRoutes[sysRoute.Destination]; !ok {
 					// 排除 host 路由 (peer 自身的路由) 和 link-local 路由
 					if sysRoute.Destination == peerStr || strings.HasPrefix(sysRoute.Destination, "169.254") {
+						continue
+					}
+					// 排除与 conf 路由 IP 相同但掩码不同的关联路由
+					// 例如 conf 有 172.17.0.0/16，系统有 172.17.0.0（/8 host路由），
+					// 两者 IP 部分相同，属于关联路由，不标记为 EXTRA
+					sysIP := extractIP(sysRoute.Destination)
+					if sysIP != "" && confIPs[sysIP] {
 						continue
 					}
 					entry := RouteEntry{
@@ -431,25 +453,43 @@ func getSystemRoutes() []SystemRoute {
 // normalizeNetstatDest 将 netstat 的目标地址格式标准化为 CIDR 格式
 func normalizeNetstatDest(dest string) string {
 	// netstat 的格式可能是：
-	// - "10.244.0.0/16" (已是 CIDR)
-	// - "90.7/16" (缩写形式)
-	// - "10.244.0.0" (host 路由)
-	// - "default" (默认路由)
-	// - "link#XX" (链路路由)
+	// - "10.96/16" (缩写+显式掩码)
+	// - "172.17"   (缩写，无掩码 → 根据八位组数推断: 2个=>/16)
+	// - "10"       (缩写，1个八位组 => /8)
+	// - "192.168.1" (缩写，3个八位组 => /24)
+	// - "192.168.49.2" (完整4八位组，host 路由)
+	// - "192.168.49.2/32" (显式 host 路由)
+	// - "default" / "link#XX" (特殊路由)
 
 	if dest == "default" || strings.HasPrefix(dest, "link#") {
 		return dest
 	}
 
-	// 已经有 / 的，尝试扩展缩写
+	// 已经有 / 的，尝试扩展缩写 IP 部分
 	if strings.Contains(dest, "/") {
 		parts := strings.Split(dest, "/")
 		ip := expandShortIP(parts[0])
 		return ip + "/" + parts[1]
 	}
 
-	// 无 / 的是 host 路由
-	return expandShortIP(dest)
+	// 无 / 的情况：根据缩写的八位组数推断掩码
+	// macOS netstat 省略尾部 .0 八位组：
+	//   "172.17"     = 2 个八位组 → 172.17.0.0/16
+	//   "10"         = 1 个八位组 → 10.0.0.0/8
+	//   "192.168.1"  = 3 个八位组 → 192.168.1.0/24
+	//   "192.168.1.1" = 4 个八位组 → host 路由 192.168.1.1（/32）
+	parts := strings.Split(dest, ".")
+	numParts := len(parts)
+
+	if numParts < 4 {
+		// 缩写形式，推断为网络路由，掩码 = 八位组数 * 8
+		expanded := expandShortIP(dest)
+		mask := numParts * 8
+		return fmt.Sprintf("%s/%d", expanded, mask)
+	}
+
+	// 完整的 4 八位组，host 路由
+	return dest
 }
 
 // expandShortIP 将缩写的 IP 地址扩展为完整形式
@@ -516,14 +556,47 @@ func fixMissingRoutes() FixResult {
 			continue
 		}
 
-		// 执行 route add
-		err := runCmd("route -n add -net %s %s", route.Network, peerStr)
+		// 使用 runOutCmd 捕获命令输出（包括 stderr），便于排查问题
+		cmdStr := fmt.Sprintf("route -n add -net %s %s", route.Network, peerStr)
+		out, err := runOutCmd("route -n add -net %s %s", route.Network, peerStr)
+		outTrimmed := strings.TrimSpace(out)
+
 		if err != nil {
 			result.Failed++
-			result.Details = append(result.Details, fmt.Sprintf("❌ %s: %v", route.Network, err))
+			detail := fmt.Sprintf("❌ %s: %v", route.Network, err)
+			if outTrimmed != "" {
+				detail += fmt.Sprintf(" (%s)", outTrimmed)
+			}
+			result.Details = append(result.Details, detail)
+			logger.Warningf("[DASHBOARD] route add failed: %s => err=%v, output=%s", cmdStr, err, outTrimmed)
 		} else {
 			result.Fixed++
 			result.Details = append(result.Details, fmt.Sprintf("✅ %s via %s", route.Network, peerStr))
+			logger.Infof("[DASHBOARD] route add ok: %s => %s", cmdStr, outTrimmed)
+		}
+	}
+
+	// 修复完成后，验证路由是否真正生效
+	if result.Fixed > 0 {
+		time.Sleep(200 * time.Millisecond) // 等待路由表更新
+		postVerify := verifyRoutes()
+		stillMissing := 0
+		for _, route := range postVerify.Routes {
+			if route.Status == RouteMissing {
+				stillMissing++
+			}
+		}
+		if stillMissing > 0 {
+			// 修正计数：route 命令返回成功但路由未真正生效
+			actualFixed := result.Fixed - stillMissing
+			if actualFixed < 0 {
+				actualFixed = 0
+			}
+			result.Details = append(result.Details,
+				fmt.Sprintf("\n⚠️ 验证发现 %d 条路由未生效（命令执行成功但路由表中未找到）", stillMissing))
+			logger.Warningf("[DASHBOARD] post-fix verify: %d routes still missing after fix", stillMissing)
+			result.Failed += (result.Fixed - actualFixed)
+			result.Fixed = actualFixed
 		}
 	}
 
@@ -534,3 +607,185 @@ func fixMissingRoutes() FixResult {
 
 // 用于解析 netstat 输出中的 CIDR 掩码
 var cidrRegex = regexp.MustCompile(`^(\d+\.[\d.]*)/(\d+)$`)
+
+// extractIP 从 CIDR 或 host 路由中提取纯 IP 部分（去掉掩码）
+// 例如 "172.17.0.0/16" → "172.17.0.0"，"172.17.0.0" → "172.17.0.0"
+func extractIP(network string) string {
+	if strings.Contains(network, "/") {
+		parts := strings.SplitN(network, "/", 2)
+		ip := net.ParseIP(parts[0])
+		if ip != nil {
+			return ip.String()
+		}
+		return parts[0]
+	}
+	ip := net.ParseIP(network)
+	if ip != nil {
+		return ip.String()
+	}
+	return network
+}
+
+// ==================== VM 反向代理 ====================
+
+// VM 可达状态管理
+var (
+	vmReachable     bool
+	vmReachableMu   sync.RWMutex
+	vmLastCheckTime time.Time
+)
+
+// registerVMProxy 注册 VM 反向代理路由
+func registerVMProxy(mux *http.ServeMux) {
+	// VM 连接状态端点（本地处理，不代理）
+	mux.HandleFunc("/api/vm/status", handleVMStatus)
+
+	// 反向代理：/api/vm/* → http://peerIP:2522/api/*
+	vmProxy := createVMReverseProxy()
+	if vmProxy != nil {
+		mux.Handle("/api/vm/", vmProxy)
+		logger.Infof("[VM-PROXY] 反向代理已注册: /api/vm/* → http://%s:%d/api/*", peer.String(), vmHTTPPort)
+	} else {
+		// peer 还未初始化时，返回等待信息
+		mux.HandleFunc("/api/vm/", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]interface{}{
+				"error":   true,
+				"message": "VM 端未连接：peer IP 尚未初始化",
+			})
+		})
+		logger.Warningf("[VM-PROXY] peer IP 未初始化，VM 反向代理暂不可用")
+	}
+
+	// 启动 VM 健康检测循环
+	go vmHealthCheckLoop()
+}
+
+// createVMReverseProxy 创建 VM 反向代理实例
+func createVMReverseProxy() http.Handler {
+	if peer == nil {
+		return nil
+	}
+
+	vmTarget := fmt.Sprintf("http://%s:%d", peer.String(), vmHTTPPort)
+	targetURL, err := url.Parse(vmTarget)
+	if err != nil {
+		logger.Warningf("[VM-PROXY] 无效的 VM 目标地址: %s, 错误: %v", vmTarget, err)
+		return nil
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = targetURL.Scheme
+			req.URL.Host = targetURL.Host
+			// /api/vm/links → /api/links（替换前缀 /api/vm → /api）
+			req.URL.Path = strings.Replace(req.URL.Path, "/api/vm", "/api", 1)
+			if req.URL.Path == "" {
+				req.URL.Path = "/"
+			}
+			req.Host = targetURL.Host
+
+			logger.Debugf("[VM-PROXY] 代理请求: %s → %s%s", req.Method, targetURL.Host, req.URL.Path)
+		},
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   3 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       60 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			logger.Warningf("[VM-PROXY] 代理错误: %s %s → %v", r.Method, r.URL.Path, err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   true,
+				"message": fmt.Sprintf("VM 端不可达: %v", err),
+				"hint":    "请确认 VM 端 docker-connector 以 -mode=service 运行",
+			})
+		},
+		// SSE 流需要 FlushInterval
+		FlushInterval: 200 * time.Millisecond,
+	}
+
+	return proxy
+}
+
+// handleVMStatus 返回 VM 连接状态（不经过代理，本地判断）
+func handleVMStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	vmReachableMu.RLock()
+	reachable := vmReachable
+	lastCheck := vmLastCheckTime
+	vmReachableMu.RUnlock()
+
+	peerStr := ""
+	if peer != nil {
+		peerStr = peer.String()
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"vm_reachable": reachable,
+		"vm_peer_ip":   peerStr,
+		"vm_http_port": vmHTTPPort,
+		"vm_api_url":   fmt.Sprintf("http://%s:%d", peerStr, vmHTTPPort),
+		"last_check":   lastCheck.Format(time.RFC3339),
+		"time":         time.Now().Format(time.RFC3339),
+	})
+}
+
+// vmHealthCheckLoop 定期检测 VM HTTP 服务是否可达
+func vmHealthCheckLoop() {
+	// 启动时等待 3 秒再首次检测（等待隧道建立）
+	time.Sleep(3 * time.Second)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// 首次立即检测
+	checkVMHealth()
+
+	for range ticker.C {
+		checkVMHealth()
+	}
+}
+
+// checkVMHealth 单次检测 VM HTTP 服务
+func checkVMHealth() {
+	if peer == nil {
+		vmReachableMu.Lock()
+		vmReachable = false
+		vmLastCheckTime = time.Now()
+		vmReachableMu.Unlock()
+		return
+	}
+
+	vmURL := fmt.Sprintf("http://%s:%d/api/health", peer.String(), vmHTTPPort)
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	resp, err := client.Get(vmURL)
+	reachable := err == nil && resp != nil && resp.StatusCode == http.StatusOK
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	vmReachableMu.Lock()
+	oldReachable := vmReachable
+	vmReachable = reachable
+	vmLastCheckTime = time.Now()
+	vmReachableMu.Unlock()
+
+	// 状态变化时记录日志
+	if reachable != oldReachable {
+		if reachable {
+			logger.Infof("[VM-PROXY] ✅ VM HTTP 服务已连接: %s", vmURL)
+		} else {
+			logger.Warningf("[VM-PROXY] ❌ VM HTTP 服务不可达: %s (err: %v)", vmURL, err)
+		}
+	}
+}
