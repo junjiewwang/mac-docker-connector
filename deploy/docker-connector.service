@@ -1,0 +1,66 @@
+# docker-connector.service
+# 在 Lima VM 中以 service 模式运行 docker-connector
+#
+# 安装位置: /etc/systemd/system/docker-connector.service
+# 配置文件: /etc/docker-connector/connector.env
+#
+# 使用方法:
+#   systemctl daemon-reload
+#   systemctl enable docker-connector
+#   systemctl start docker-connector
+#   journalctl -u docker-connector -f
+
+[Unit]
+Description=Docker Connector Service (VM Link Management)
+Documentation=https://github.com/wenjunxiao/mac-docker-connector
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+
+# 设置 HOME 环境变量（systemd 默认不设置 HOME）
+# kubectl 依赖 $HOME/.kube/config 定位 kubeconfig，缺少 HOME 会导致
+# kubectl 回退到 in-cluster config 并反复重试失败，每次调用耗时 ~2.7s
+Environment=HOME=/root
+# 从环境文件读取配置（必须存在，包含端口/地址等必要参数）
+EnvironmentFile=/etc/docker-connector/connector.env
+
+# 启动参数说明:
+#   -mode=service    启用 Link 管理 + HTTP API
+#   -port=2521       UDP 隧道端口（需与 Desktop 端一致）
+#   -addr=...        虚拟网络地址（需与 Desktop 端一致）
+#   -host=...        Desktop 端地址（Lima VM 中通常是宿主机 IP）
+#   -http-port=2522  VM HTTP API 端口
+ExecStart=/usr/local/bin/docker-connector \
+    -mode=service \
+    -port=${CONNECTOR_PORT} \
+    -addr=${CONNECTOR_ADDR} \
+    -host=${CONNECTOR_HOST} \
+    -http-port=${CONNECTOR_HTTP_PORT}
+
+# 重启策略
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+
+# 安全设置（需要 root 权限操作 iptables / ip route / TUN）
+# 不使用 User/Group 限制，因为需要:
+#   - 创建 TUN 设备
+#   - 操作 iptables
+#   - 配置 ip route
+#   - 访问 docker.sock
+#   - 配置 systemd-resolved DNS
+
+# 日志输出到 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docker-connector
+
+# 进程终止信号
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
