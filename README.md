@@ -50,6 +50,60 @@
 +-------------------------------+
 ```
 
+## Features
+
+| Feature | Description | Since |
+|---------|-------------|-------|
+| **UDP TUN Tunnel** | Access Docker container IPs from macOS/Windows host via TUN device | v1.0 |
+| **Cross-subnet Access** | Allow two Docker subnets to access each other via iptables rules | v1.0 |
+| **Container Expose** | Expose your Docker containers to other people via accessor | v1.0 |
+| **Custom DNS & Proxy** | Custom host DNS resolution + local service proxy for containers | v1.0 |
+| **Web Dashboard** | Built-in web UI for route verification, one-click fix, and status visualization | Phase 1 |
+| **VM Link Management** | 5 network links (iptables/route/dns) managed via HTTP API with Go-rewritten link layer | Phase 2 |
+| **Network Topology** | Interactive SVG topology diagram showing all VM link states in real-time | Phase 2 |
+| **Lima VM Deployment** | Native Linux systemd service deployment for Lima VM (replacing Docker container) | Phase 2 |
+
+## Architecture
+
+```
++-------------------------------------------------------------------+
+|                       macOS Host                                  |
+|                                                                   |
+|  Browser ──HTTP──▶ desktop-docker-connector                       |
+|                    ├─ UDP :2511  (TUN VPN Tunnel)                 |
+|                    ├─ HTTP :2511 (Web Dashboard)                  |
+|                    │   ├─ GET  /api/status                        |
+|                    │   ├─ GET  /api/routes/verify                 |
+|                    │   ├─ POST /api/routes/fix                    |
+|                    │   └─ /api/vm/* (reverse proxy to VM)         |
+|                    └─ config: docker-connector.conf               |
+|                                                                   |
+|                         ▲ UDP Tunnel                              |
+|                         │                                         |
++-------------------------│-----------------------------------------+
+                          │
++-------------------------▼-----------------------------------------+
+|                   Lima VM / Hypervisor                             |
+|                                                                   |
+|  docker-connector (systemd service, -mode=service)                |
+|  ├─ TUN Client (UDP tunnel to Desktop)                            |
+|  ├─ HTTP :2522 (VM Link API, bound to peer IP)                   |
+|  │   ├─ GET  /api/links          (all link status)               |
+|  │   ├─ GET  /api/links/stream   (SSE real-time)                 |
+|  │   ├─ POST /api/apply          (apply link rules)              |
+|  │   ├─ POST /api/revert         (revert link rules)             |
+|  │   └─ GET  /api/network/info   (network info)                  |
+|  └─ LinkManager                                                   |
+|      ├─ InternetLink        (Docker/K8s ↔ Internet)              |
+|      ├─ HostDockerLink      (Host ↔ Docker)                      |
+|      ├─ HostK8sLink         (Host ↔ K8s, .service/.pod)          |
+|      ├─ DockerK8sLink       (Docker ↔ K8s, .service/.pod)        |
+|      └─ DockerDockerLink    (Docker ↔ Docker cross-subnet)       |
+|                                                                   |
+|  Docker Daemon  |  Minikube / K8s                                 |
++-------------------------------------------------------------------+
+```
+
 ## Usage
 
 ### Host
@@ -102,6 +156,51 @@ $ docker run -it -d --restart always --net host --cap-add NET_ADMIN --name deskt
 ```
 
   If you want to expose the containers of docker to other pepole, Please reference [docker-accessor](./accessor)
+
+### Lima VM (Service Mode)
+
+  For Lima VM users, the connector can be deployed as a native Linux systemd service, which provides full access to system commands (`docker`, `kubectl`, `iptables`, `systemd-resolved`, etc.) and enables the VM Link Management features.
+
+  **Quick deploy with the install script:**
+```bash
+# Copy the binary and deploy script into Lima VM
+$ limactl shell default -- bash -s < deploy/install.sh
+```
+
+  **Or manual deployment:**
+```bash
+# 1. Build the VM connector binary
+$ cd docker && GOOS=linux GOARCH=amd64 go build -o docker-connector .
+
+# 2. Copy binary to VM
+$ limactl copy docker-connector default:/usr/local/bin/
+
+# 3. Copy and configure systemd service
+$ limactl copy deploy/docker-connector.service default:/etc/systemd/system/
+$ limactl copy deploy/connector.env default:/etc/docker-connector/connector.env
+
+# 4. Start the service
+$ limactl shell default -- sudo systemctl daemon-reload
+$ limactl shell default -- sudo systemctl enable --now docker-connector
+```
+
+  Check the service status:
+```bash
+$ limactl shell default -- sudo systemctl status docker-connector
+$ limactl shell default -- sudo journalctl -u docker-connector -f
+```
+
+## Web Dashboard
+
+  The built-in Web Dashboard is available at `http://localhost:2511` (same port as the UDP tunnel).
+
+  **Features:**
+  - **Route Verification** — Cross-check `docker-connector.conf` routes against macOS system routing table (`netstat -rn`)
+  - **One-click Fix** — Automatically add missing routes with `route -n add`
+  - **Connector Status** — Uptime, client connection, TUN interface, peer IP
+  - **VM Link Panel** — Real-time status of all 5 network links in the VM (requires service mode)
+  - **Network Topology** — Interactive SVG diagram showing link states with color coding
+  - **Auto Refresh** — Dashboard polls every 5 seconds with diff-based DOM updates (no flicker)
 
 ## Configuration
 
@@ -161,3 +260,85 @@ $ docker run -it -d --restart always --net host --cap-add NET_ADMIN --name deskt
    proxy 127.0.0.1:80:80
    ````
    The first part `127.0.0.1:80` is the address where the local service listens, and the port `80` in the latter part is the port where the proxy listens
+
+## VM Link Management
+
+  When running in **service mode** (`-mode=service`), the VM connector provides 5 network link managers to configure iptables, routes, and DNS rules for full network connectivity.
+
+| Link | Sub-levels | Description | Operations |
+|------|-----------|-------------|------------|
+| **internet** | — | Docker/K8s ↔ Internet | FORWARD bridge↔physical NIC + NAT MASQUERADE |
+| **host-docker** | — | Host (tun0) ↔ Docker containers | FORWARD tun0↔non-minikube bridges |
+| **host-k8s** | `.service` `.pod` | Host (tun0) ↔ Kubernetes | route + FORWARD tun0↔mk bridge + DNS |
+| **docker-k8s** | `.service` `.pod` | Docker ↔ Kubernetes | FORWARD non-mk bridge↔mk bridge |
+| **docker-docker** | — | Docker cross-subnet communication | FORWARD bridge↔bridge |
+
+  Use the Dashboard's **VM Link Panel** or call the HTTP API directly:
+```bash
+# Get all link status
+$ curl http://localhost:2511/api/vm/links
+
+# Apply all links
+$ curl -X POST http://localhost:2511/api/vm/apply
+
+# Apply specific link
+$ curl -X POST http://localhost:2511/api/vm/apply -d '{"links":["host-docker"]}'
+
+# Revert specific link
+$ curl -X POST http://localhost:2511/api/vm/revert -d '{"links":["host-k8s.service"]}'
+```
+
+## Project Structure
+
+```
+├── desktop/                  # macOS/Windows host connector (TUN server)
+│   ├── main.go               # Entry point + service management
+│   ├── service.go            # VPN service logic + config hot-reload
+│   ├── config.go             # Configuration parsing
+│   ├── dashboard.go          # Web Dashboard HTTP server + API
+│   ├── dashboard_html.go     # Embedded frontend (HTML/CSS/JS)
+│   ├── expose.go             # Container expose (accessor support)
+│   └── proxy.go              # Local service proxy
+├── docker/                   # VM/container connector (TUN client)
+│   ├── main.go               # Entry point (container/service mode)
+│   ├── vm_http_server.go     # VM HTTP API + SSE streaming
+│   ├── link_manager.go       # Link interface + registry
+│   ├── link_internet.go      # InternetLink
+│   ├── link_host_docker.go   # HostDockerLink
+│   ├── link_host_k8s.go      # HostK8sLink (.service/.pod)
+│   ├── link_docker_k8s.go    # DockerK8sLink (.service/.pod)
+│   ├── link_docker_docker.go # DockerDockerLink
+│   ├── infra_iptables.go     # IptablesManager
+│   ├── infra_network.go      # NetworkInfoProvider (docker CLI)
+│   ├── infra_route.go        # RouteManager (ip route)
+│   ├── infra_dns.go          # DnsManager (systemd-resolved)
+│   ├── infra_command.go      # Command executor
+│   └── dns_server.go         # Embedded DNS server
+├── deploy/                   # Deployment scripts
+│   ├── install.sh            # Lima VM one-click install
+│   ├── deploy-to-lima.sh     # Lima-specific deploy script
+│   ├── deploy-desktop.sh     # Desktop deploy script
+│   ├── docker-connector.service  # systemd unit file
+│   └── connector.env         # Service environment config
+├── scripts/                  # Python network setup scripts
+│   └── setup-docker-network.py   # Original Python link manager
+├── docs/                     # Design documents
+│   ├── phase2-vm-link-management.md  # Phase 2 full design doc
+│   ├── web-dashboard.md      # Web Dashboard design doc
+│   ├── zone-link-refactor.md # Zone/Link model design
+│   └── pod-network-support.md
+├── DEBUG_GUIDE.md            # Debug & troubleshooting guide
+└── accessor/                 # Docker accessor (for exposing containers)
+```
+
+## Debugging
+
+  See [DEBUG_GUIDE.md](./DEBUG_GUIDE.md) for detailed debugging instructions, including:
+  - Log level configuration (`-log-level DEBUG`)
+  - Packet tracing (`TUN->UDP` / `UDP->TUN`)
+  - Client connection diagnostics
+  - Common issue troubleshooting
+
+## License
+
+  [MIT](./LICENSE)

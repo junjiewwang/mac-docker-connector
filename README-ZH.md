@@ -46,6 +46,60 @@
 +-------------------------------+
 ```
 
+## 功能特性
+
+| 功能 | 说明 | 版本 |
+|------|------|------|
+| **UDP TUN 隧道** | 通过 TUN 设备从 macOS/Windows 宿主机直接访问 Docker 容器 IP | v1.0 |
+| **子网互通** | 通过 iptables 规则实现两个 Docker 子网之间的互相访问 | v1.0 |
+| **容器导出** | 通过 accessor 将你的 Docker 容器导出给其他人访问 | v1.0 |
+| **自定义 DNS 与代理** | 容器内使用自定义域名解析 + 本地服务代理 | v1.0 |
+| **Web Dashboard** | 内置 Web 面板，提供路由校验、一键修复和状态可视化 | Phase 1 |
+| **VM 链路管理** | 5 条网络链路（iptables/route/dns）通过 HTTP API 管理，Go 重写链路层 | Phase 2 |
+| **网络拓扑图** | 交互式 SVG 拓扑图，实时展示 VM 所有链路状态 | Phase 2 |
+| **Lima VM 部署** | 原生 Linux systemd 服务部署（替代 Docker 容器方式） | Phase 2 |
+
+## 架构
+
+```
++-------------------------------------------------------------------+
+|                       macOS 宿主机                                 |
+|                                                                   |
+|  浏览器 ──HTTP──▶ desktop-docker-connector                        |
+|                   ├─ UDP :2511  (TUN VPN 隧道)                    |
+|                   ├─ HTTP :2511 (Web Dashboard)                   |
+|                   │   ├─ GET  /api/status                         |
+|                   │   ├─ GET  /api/routes/verify                  |
+|                   │   ├─ POST /api/routes/fix                     |
+|                   │   └─ /api/vm/* (反向代理到 VM)                 |
+|                   └─ 配置: docker-connector.conf                   |
+|                                                                   |
+|                         ▲ UDP 隧道                                |
+|                         │                                         |
++-------------------------│-----------------------------------------+
+                          │
++-------------------------▼-----------------------------------------+
+|                   Lima VM / Hypervisor                             |
+|                                                                   |
+|  docker-connector (systemd 服务, -mode=service)                   |
+|  ├─ TUN Client (UDP 隧道连接 Desktop)                             |
+|  ├─ HTTP :2522 (VM 链路 API, 绑定 peer IP)                       |
+|  │   ├─ GET  /api/links          (所有链路状态)                    |
+|  │   ├─ GET  /api/links/stream   (SSE 实时推送)                   |
+|  │   ├─ POST /api/apply          (应用链路规则)                    |
+|  │   ├─ POST /api/revert         (还原链路规则)                    |
+|  │   └─ GET  /api/network/info   (网络信息)                       |
+|  └─ LinkManager                                                   |
+|      ├─ InternetLink        (Docker/K8s ↔ 外网)                  |
+|      ├─ HostDockerLink      (宿主机 ↔ Docker)                    |
+|      ├─ HostK8sLink         (宿主机 ↔ K8s, .service/.pod)        |
+|      ├─ DockerK8sLink       (Docker ↔ K8s, .service/.pod)        |
+|      └─ DockerDockerLink    (Docker ↔ Docker 跨子网)             |
+|                                                                   |
+|  Docker Daemon  |  Minikube / K8s                                 |
++-------------------------------------------------------------------+
+```
+
 ## 使用
 
 ### 宿主机
@@ -100,6 +154,51 @@ $ docker run -it -d --restart always --net host --cap-add NET_ADMIN --name mac-c
   如果你向导出你自己的容器给其他人，让其他人可以访问你在容器中搭建的服务，其他人必须安装另一个客户端[docker-accessor](./accessor)，同时你必须开启`expose`（这默认是关闭的）和提供访问的令牌(`token`)，
   更详细的配置说明参考配置说明
 
+### Lima VM（服务模式）
+
+  对于 Lima VM 用户，connector 可以部署为原生 Linux systemd 服务，能够完整使用系统命令（`docker`、`kubectl`、`iptables`、`systemd-resolved` 等），并启用 VM 链路管理功能。
+
+  **使用安装脚本快速部署：**
+```bash
+# 将二进制文件和部署脚本复制到 Lima VM 中
+$ limactl shell default -- bash -s < deploy/install.sh
+```
+
+  **或手动部署：**
+```bash
+# 1. 编译 VM 端 connector 二进制
+$ cd docker && GOOS=linux GOARCH=amd64 go build -o docker-connector .
+
+# 2. 复制二进制文件到 VM
+$ limactl copy docker-connector default:/usr/local/bin/
+
+# 3. 复制并配置 systemd 服务文件
+$ limactl copy deploy/docker-connector.service default:/etc/systemd/system/
+$ limactl copy deploy/connector.env default:/etc/docker-connector/connector.env
+
+# 4. 启动服务
+$ limactl shell default -- sudo systemctl daemon-reload
+$ limactl shell default -- sudo systemctl enable --now docker-connector
+```
+
+  查看服务状态：
+```bash
+$ limactl shell default -- sudo systemctl status docker-connector
+$ limactl shell default -- sudo journalctl -u docker-connector -f
+```
+
+## Web Dashboard
+
+  内置的 Web Dashboard 可通过 `http://localhost:2511` 访问（与 UDP 隧道共用端口）。
+
+  **功能：**
+  - **路由校验** — 交叉对比 `docker-connector.conf` 路由配置与 macOS 系统路由表（`netstat -rn`）
+  - **一键修复** — 对 MISSING 路由自动执行 `route -n add`
+  - **连接状态** — 运行时间、客户端连接状态、TUN 接口信息、Peer IP
+  - **VM 链路面板** — 实时显示 VM 中 5 条网络链路的状态（需要服务模式）
+  - **网络拓扑图** — 交互式 SVG 拓扑图，通过颜色标识链路状态
+  - **自动刷新** — 每 5 秒轮询，使用差量 DOM 更新（无闪烁）
+
 ## 配置说明
 
   基本的配置选项，通常你不需要修改他们，除非你的环境冲突（比如端口被占用，子网已使用）。
@@ -152,3 +251,85 @@ $ docker run -it -d --restart always --net host --cap-add NET_ADMIN --name mac-c
   proxy 127.0.0.1:80:80
   ```
   第一部分`127.0.0.1:80`是本地服务监听的地址，后面部分的端口`80`是代理监听的端口
+
+## VM 链路管理
+
+  在 **服务模式**（`-mode=service`）下运行时，VM 端 connector 提供 5 条网络链路管理器，用于配置 iptables、路由和 DNS 规则，实现完整的网络连通性。
+
+| 链路 | 子层级 | 说明 | 底层操作 |
+|------|--------|------|---------|
+| **internet** | — | Docker/K8s ↔ 外网 | FORWARD 网桥↔物理网卡 + NAT MASQUERADE |
+| **host-docker** | — | 宿主机 (tun0) ↔ Docker 容器 | FORWARD tun0↔非 Minikube 网桥 |
+| **host-k8s** | `.service` `.pod` | 宿主机 (tun0) ↔ Kubernetes | route + FORWARD tun0↔mk 网桥 + DNS |
+| **docker-k8s** | `.service` `.pod` | Docker ↔ Kubernetes | FORWARD 非 mk 网桥↔mk 网桥 |
+| **docker-docker** | — | Docker 跨子网通信 | FORWARD 网桥↔网桥 |
+
+  通过 Dashboard 的 **VM 链路面板** 或直接调用 HTTP API 操作：
+```bash
+# 获取所有链路状态
+$ curl http://localhost:2511/api/vm/links
+
+# 应用所有链路
+$ curl -X POST http://localhost:2511/api/vm/apply
+
+# 应用指定链路
+$ curl -X POST http://localhost:2511/api/vm/apply -d '{"links":["host-docker"]}'
+
+# 还原指定链路
+$ curl -X POST http://localhost:2511/api/vm/revert -d '{"links":["host-k8s.service"]}'
+```
+
+## 项目结构
+
+```
+├── desktop/                  # macOS/Windows 宿主机 connector（TUN 服务端）
+│   ├── main.go               # 入口 + 服务管理
+│   ├── service.go            # VPN 服务逻辑 + 配置热加载
+│   ├── config.go             # 配置文件解析
+│   ├── dashboard.go          # Web Dashboard HTTP 服务 + API
+│   ├── dashboard_html.go     # 内嵌前端（HTML/CSS/JS）
+│   ├── expose.go             # 容器导出（accessor 支持）
+│   └── proxy.go              # 本地服务代理
+├── docker/                   # VM/容器端 connector（TUN 客户端）
+│   ├── main.go               # 入口（容器/服务 两种模式）
+│   ├── vm_http_server.go     # VM HTTP API + SSE 流式推送
+│   ├── link_manager.go       # Link 接口 + 注册表
+│   ├── link_internet.go      # InternetLink
+│   ├── link_host_docker.go   # HostDockerLink
+│   ├── link_host_k8s.go      # HostK8sLink（.service/.pod）
+│   ├── link_docker_k8s.go    # DockerK8sLink（.service/.pod）
+│   ├── link_docker_docker.go # DockerDockerLink
+│   ├── infra_iptables.go     # IptablesManager
+│   ├── infra_network.go      # NetworkInfoProvider（docker CLI）
+│   ├── infra_route.go        # RouteManager（ip route）
+│   ├── infra_dns.go          # DnsManager（systemd-resolved）
+│   ├── infra_command.go      # 命令执行封装
+│   └── dns_server.go         # 内嵌 DNS 服务
+├── deploy/                   # 部署脚本
+│   ├── install.sh            # Lima VM 一键安装
+│   ├── deploy-to-lima.sh     # Lima 专用部署脚本
+│   ├── deploy-desktop.sh     # Desktop 部署脚本
+│   ├── docker-connector.service  # systemd 服务单元文件
+│   └── connector.env         # 服务环境配置
+├── scripts/                  # Python 网络设置脚本
+│   └── setup-docker-network.py   # 原始 Python 链路管理器
+├── docs/                     # 设计文档
+│   ├── phase2-vm-link-management.md  # Phase 2 完整设计文档
+│   ├── web-dashboard.md      # Web Dashboard 设计文档
+│   ├── zone-link-refactor.md # Zone/Link 模型设计
+│   └── pod-network-support.md
+├── DEBUG_GUIDE.md            # 调试与故障排查指南
+└── accessor/                 # Docker accessor（容器导出客户端）
+```
+
+## 调试
+
+  参考 [DEBUG_GUIDE.md](./DEBUG_GUIDE.md) 获取详细的调试说明，包括：
+  - 日志级别设置（`-log-level DEBUG`）
+  - 数据包跟踪（`TUN->UDP` / `UDP->TUN`）
+  - 客户端连接诊断
+  - 常见问题排查
+
+## 许可证
+
+  [MIT](./LICENSE)
