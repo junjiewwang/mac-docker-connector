@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/op/go-logging"
 )
 
 // ==================== Dashboard 数据模型 ====================
@@ -113,6 +115,18 @@ func startDashboard() {
 		mux.HandleFunc("/api/routes/verify", handleAPIRoutesVerify)
 		mux.HandleFunc("/api/routes/fix", handleAPIRoutesFix)
 
+		// Config API 端点
+		mux.HandleFunc("/api/config", handleAPIConfig)
+		mux.HandleFunc("/api/config/raw", handleAPIConfigRaw)
+		mux.HandleFunc("/api/config/route", handleAPIConfigRoute)
+		mux.HandleFunc("/api/config/iptables", handleAPIConfigIptables)
+		mux.HandleFunc("/api/config/expose", handleAPIConfigExpose)
+		mux.HandleFunc("/api/config/token", handleAPIConfigToken)
+		mux.HandleFunc("/api/config/hosts", handleAPIConfigHosts)
+		mux.HandleFunc("/api/config/proxy", handleAPIConfigProxy)
+		mux.HandleFunc("/api/config/basic", handleAPIConfigBasic)
+		mux.HandleFunc("/api/config/discover", handleAPIConfigDiscover)
+
 		// VM 反向代理 — /api/vm/* → http://peerIP:2522/api/*
 		registerVMProxy(mux)
 
@@ -136,7 +150,7 @@ func startDashboard() {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -601,6 +615,343 @@ func fixMissingRoutes() FixResult {
 	}
 
 	return result
+}
+
+// ==================== Config API Handlers ====================
+
+// handleAPIConfig 获取结构化配置
+func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := parseConfigToJSON()
+	if err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, cfg)
+}
+
+// handleAPIConfigRaw 获取或覆盖原始配置文件
+func handleAPIConfigRaw(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		content, err := readConfigRaw()
+		if err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"content": content})
+	case "PUT":
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+			return
+		}
+		if err := writeConfigRaw(req.Content); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": "配置文件已更新，热加载将在 2 秒内生效"})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIConfigRoute 添加或删除路由
+func handleAPIConfigRoute(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Network string `json:"network"`
+		Expose  bool   `json:"expose"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+
+	// 验证 network 非空
+	req.Network = strings.TrimSpace(req.Network)
+	if req.Network == "" {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "网络地址不能为空"})
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+		// 添加路由时严格验证 CIDR 格式
+		if _, _, err := net.ParseCIDR(req.Network); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": fmt.Sprintf("无效的 CIDR 格式: %s", req.Network)})
+			return
+		}
+		// 检查是否已存在
+		if _, exists := routes[req.Network]; exists {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": fmt.Sprintf("路由 %s 已存在", req.Network)})
+			return
+		}
+		line := "route " + req.Network
+		if req.Expose {
+			line += " expose"
+		}
+		if err := addConfigLine(line); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("路由 %s 已添加，热加载将在 2 秒内生效", req.Network)})
+	case "DELETE":
+		if err := removeConfigLine(func(key, value string) bool {
+			if key != "route" {
+				return false
+			}
+			vals := strings.Fields(value)
+			return len(vals) > 0 && vals[0] == req.Network
+		}); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("路由 %s 已删除，热加载将在 2 秒内生效", req.Network)})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIConfigIptables 添加或删除 iptables 互通规则
+func handleAPIConfigIptables(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SubnetA string `json:"subnet_a"`
+		SubnetB string `json:"subnet_b"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+	if req.SubnetA == "" || req.SubnetB == "" {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "subnet_a 和 subnet_b 不能为空"})
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+		line := fmt.Sprintf("iptables %s+%s", req.SubnetA, req.SubnetB)
+		if err := addConfigLine(line); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": "iptables 规则已添加"})
+	case "DELETE":
+		if err := removeConfigLine(func(key, value string) bool {
+			if key != "iptables" {
+				return false
+			}
+			// 匹配 a+b 或 b+a 或 a-b 或 b-a
+			return value == req.SubnetA+"+"+req.SubnetB ||
+				value == req.SubnetB+"+"+req.SubnetA ||
+				value == req.SubnetA+"-"+req.SubnetB ||
+				value == req.SubnetB+"-"+req.SubnetA
+		}); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": "iptables 规则已删除"})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIConfigExpose 更新 expose 配置
+func handleAPIConfigExpose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Address string `json:"address"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+
+	// 先尝试删除旧的 expose 行
+	_ = removeConfigLine(func(key, value string) bool { return key == "expose" })
+
+	if req.Address != "" {
+		if err := addConfigLine("expose " + req.Address); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "message": "expose 配置已更新"})
+}
+
+// handleAPIConfigToken 添加或删除 token
+func handleAPIConfigToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+		if req.Name == "" || req.IP == "" {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": "name 和 ip 不能为空"})
+			return
+		}
+		line := fmt.Sprintf("token %s %s", req.Name, req.IP)
+		if err := addConfigLine(line); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("token %s 已添加", req.Name)})
+	case "DELETE":
+		if req.Name == "" {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": "name 不能为空"})
+			return
+		}
+		if err := removeConfigLine(func(key, value string) bool {
+			if key != "token" {
+				return false
+			}
+			vals := strings.Fields(value)
+			return len(vals) > 0 && vals[0] == req.Name
+		}); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("token %s 已删除", req.Name)})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIConfigHosts 更新 hosts 配置
+func handleAPIConfigHosts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+
+	// 先删除旧的 hosts 行
+	_ = removeConfigLine(func(key, value string) bool { return key == "hosts" })
+
+	if req.Value != "" {
+		if err := addConfigLine("hosts " + req.Value); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "message": "hosts 配置已更新"})
+}
+
+// handleAPIConfigProxy 添加或删除 proxy
+func handleAPIConfigProxy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Rule string `json:"rule"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+	if req.Rule == "" {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "rule 不能为空"})
+		return
+	}
+
+	switch r.Method {
+	case "POST":
+		if err := addConfigLine("proxy " + req.Rule); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("proxy %s 已添加", req.Rule)})
+	case "DELETE":
+		if err := removeConfigLine(func(key, value string) bool {
+			return key == "proxy" && strings.TrimSpace(value) == req.Rule
+		}); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("proxy %s 已删除", req.Rule)})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIConfigBasic 更新基础配置（loglevel、pong 等可热加载项）
+func handleAPIConfigBasic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		LogLevel *string `json:"loglevel"`
+		Pong     *bool   `json:"pong"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": "无效的请求体"})
+		return
+	}
+
+	changes := []string{}
+
+	if req.LogLevel != nil {
+		// 验证日志级别
+		if _, err := logging.LogLevel(*req.LogLevel); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": fmt.Sprintf("无效的日志级别: %s", *req.LogLevel)})
+			return
+		}
+		_ = removeConfigLine(func(key, value string) bool { return key == "loglevel" })
+		if err := addConfigLine("loglevel " + *req.LogLevel); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		changes = append(changes, "loglevel="+*req.LogLevel)
+	}
+
+	if req.Pong != nil {
+		_ = removeConfigLine(func(key, value string) bool { return key == "pong" })
+		val := "off"
+		if *req.Pong {
+			val = "on"
+		}
+		if err := addConfigLine("pong " + val); err != nil {
+			writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error()})
+			return
+		}
+		changes = append(changes, fmt.Sprintf("pong=%s", val))
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"ok":      true,
+		"message": fmt.Sprintf("配置已更新: %s", strings.Join(changes, ", ")),
+	})
+}
+
+// handleAPIConfigDiscover 自动发现 Docker 子网
+func handleAPIConfigDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	subnets, err := discoverDockerSubnets()
+	if err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "message": err.Error(), "networks": []DockerSubnet{}})
+		return
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "networks": subnets})
 }
 
 // ==================== 辅助工具函数 ====================

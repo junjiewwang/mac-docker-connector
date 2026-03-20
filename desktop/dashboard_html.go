@@ -7,6 +7,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Docker Connector Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='80'>🐳</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -44,8 +45,8 @@ body{
   font-family:var(--font-sans);
   background:var(--bg-primary);
   color:var(--text-primary);
-  min-height:100vh;
-  overflow-x:hidden;
+  height:100vh;
+  overflow:hidden;
 }
 /* 背景网格 */
 body::before{
@@ -83,13 +84,74 @@ body::after{
   min-width:18px;text-align:right;
 }
 
-.app{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:20px 32px 40px}
+.app{position:relative;z-index:1;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ===== 侧边栏布局 ===== */
+.app-body{display:flex;flex:1;overflow:hidden}
+.sidebar{
+  width:180px;min-width:180px;
+  background:var(--bg-secondary);
+  border-right:1px solid var(--border-subtle);
+  display:flex;flex-direction:column;
+  padding:16px 0;gap:2px;
+  overflow-y:auto;
+}
+.sidebar-nav{display:flex;flex-direction:column;gap:2px;padding:0 8px}
+.sidebar-btn{
+  display:flex;align-items:center;gap:10px;
+  padding:11px 16px;border-radius:var(--radius-sm);
+  font-size:0.82rem;font-weight:500;color:var(--text-muted);
+  cursor:pointer;border:none;background:none;
+  font-family:var(--font-sans);
+  transition:all var(--transition-fast);
+  text-align:left;width:100%;
+}
+.sidebar-btn:hover{color:var(--text-secondary);background:var(--bg-card)}
+.sidebar-btn.active{
+  color:var(--accent-blue);background:rgba(99,102,241,0.08);
+  font-weight:600;
+}
+.sidebar-btn .nav-icon{font-size:1.05rem;width:22px;text-align:center;flex-shrink:0}
+.sidebar-btn .nav-label{white-space:nowrap}
+.sidebar-divider{height:1px;background:var(--border-subtle);margin:10px 16px}
+.sidebar-footer{
+  margin-top:auto;padding:12px 16px;
+  font-size:0.65rem;color:var(--text-muted);font-family:var(--font-mono);
+  border-top:1px solid var(--border-subtle);
+}
+
+/* 右侧主区域 */
+.main-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.main-header{padding:16px 28px 0;flex-shrink:0;transition:max-height 0.3s ease,opacity 0.3s ease,padding 0.3s ease;overflow:hidden}
+.main-header.collapsed{max-height:0!important;opacity:0;padding:0 28px;pointer-events:none}
+.main-scroll{flex:1;overflow-y:auto;padding:0 28px 28px}
+
+/* Hero 折叠控制 */
+.hero-toggle-bar{
+  display:flex;align-items:center;justify-content:flex-end;
+  padding:6px 0;flex-shrink:0;
+}
+.hero-toggle-btn{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 10px;border-radius:var(--radius-xs);border:1px solid var(--border-subtle);
+  background:var(--bg-card-alt);color:var(--text-muted);cursor:pointer;
+  font-size:0.66rem;font-family:var(--font-mono);
+  transition:all var(--transition-fast);
+}
+.hero-toggle-btn:hover{border-color:var(--border-color);color:var(--text-secondary)}
+
+/* 自定义滚动条 */
+.main-scroll::-webkit-scrollbar{width:6px}
+.main-scroll::-webkit-scrollbar-track{background:transparent}
+.main-scroll::-webkit-scrollbar-thumb{background:var(--border-color);border-radius:3px}
+.main-scroll::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
 
 /* ===== Header ===== */
 .header{
   display:flex;justify-content:space-between;align-items:center;
-  padding:16px 0 20px;margin-bottom:20px;
+  padding:10px 28px;flex-shrink:0;
   border-bottom:1px solid var(--border-subtle);
+  background:var(--bg-primary);
 }
 .header-left{display:flex;align-items:center;gap:14px}
 .logo{
@@ -130,9 +192,9 @@ body::after{
 
 /* ===== 主布局 ===== */
 .dashboard-grid{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:16px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
 }
 
 /* ===== Hero 状态区 — 突出关键指标 ===== */
@@ -346,20 +408,8 @@ body::after{
 .toast.success{border-color:rgba(16,185,129,0.3);color:var(--accent-green)}
 .toast.error{border-color:rgba(239,68,68,0.3);color:var(--accent-red)}
 
-/* ===== Tab 栏 ===== */
-.tab-bar{
-  display:flex;gap:0;border-bottom:1px solid var(--border-subtle);
-  margin-bottom:16px;
-}
-.tab-btn{
-  padding:10px 22px;font-size:0.8rem;font-weight:600;color:var(--text-muted);
-  cursor:pointer;border:none;background:none;
-  border-bottom:2px solid transparent;
-  transition:all var(--transition-fast);font-family:var(--font-sans);
-  display:flex;align-items:center;gap:6px;
-}
-.tab-btn:hover{color:var(--text-secondary)}
-.tab-btn.active{color:var(--accent-blue);border-bottom-color:var(--accent-blue)}
+/* ===== Tab 栏（已移至侧边栏，保留 panel 样式） ===== */
+.tab-bar{display:none}/* 隐藏旧的顶部 tab-bar */
 .tab-panel{display:none}
 .tab-panel.active{display:block}
 
@@ -516,20 +566,159 @@ body::after{
 .topo-legend-dot.partial{background:var(--accent-amber)}
 .topo-legend-dot.inactive{background:var(--text-muted)}
 
+/* ===== Configuration Tab ===== */
+.config-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
+.config-col{display:flex;flex-direction:column;gap:14px}
+.config-section{
+  background:var(--bg-card);border:1px solid var(--border-color);
+  border-radius:var(--radius);padding:18px 22px;
+  transition:border-color var(--transition-normal);
+}
+.config-section:hover{border-color:rgba(99,102,241,0.15)}
+.config-section-title{
+  font-size:0.78rem;font-weight:600;color:var(--text-secondary);
+  text-transform:uppercase;letter-spacing:0.05em;
+  display:flex;align-items:center;gap:8px;margin-bottom:14px;
+}
+.config-section-title .section-icon{font-size:1rem;opacity:0.7}
+.config-warn{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 16px;border-radius:var(--radius-sm);
+  background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.15);
+  color:var(--accent-amber);font-size:0.76rem;margin-bottom:12px;
+}
+.config-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;
+}
+.config-field{
+  display:flex;flex-direction:column;gap:4px;
+}
+.config-field label{
+  font-size:0.66rem;color:var(--text-muted);text-transform:uppercase;
+  letter-spacing:0.06em;font-weight:500;
+}
+.config-field .cfg-val{
+  font-family:var(--font-mono);font-size:0.85rem;color:var(--text-primary);
+  padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-xs);
+}
+.config-field input,.config-field select{
+  font-family:var(--font-mono);font-size:0.82rem;color:var(--text-primary);
+  padding:7px 12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-xs);outline:none;
+  transition:border-color var(--transition-fast);
+}
+.config-field input:focus,.config-field select:focus{
+  border-color:var(--accent-blue);box-shadow:0 0 0 2px rgba(99,102,241,0.15);
+}
+.config-field select{cursor:pointer}
+
+/* 配置表格 */
+.config-table{width:100%;border-collapse:separate;border-spacing:0 3px}
+.config-table th{
+  text-align:left;padding:6px 14px;font-size:0.66rem;font-weight:600;
+  color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;
+  border-bottom:1px solid var(--border-subtle);
+}
+.config-table td{
+  padding:7px 14px;font-family:var(--font-mono);font-size:0.78rem;
+  background:var(--bg-card-alt);transition:background var(--transition-fast);
+}
+.config-table tr td:first-child{border-radius:var(--radius-xs) 0 0 var(--radius-xs)}
+.config-table tr td:last-child{border-radius:0 var(--radius-xs) var(--radius-xs) 0}
+.config-table tbody tr:hover td{background:var(--bg-card-hover)}
+
+.btn-sm{font-size:0.7rem;padding:4px 10px;white-space:nowrap;flex-shrink:0}
+.btn-danger{border-color:rgba(239,68,68,0.3);color:var(--accent-red)}
+.btn-danger:hover{background:rgba(239,68,68,0.1);border-color:var(--accent-red)}
+.btn-success{border-color:rgba(16,185,129,0.3);color:var(--accent-green)}
+.btn-success:hover{background:rgba(16,185,129,0.1);border-color:var(--accent-green)}
+
+.config-add-row{
+  display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;
+}
+.config-add-row input{
+  font-family:var(--font-mono);font-size:0.78rem;color:var(--text-primary);
+  padding:6px 12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-xs);outline:none;
+  transition:border-color var(--transition-fast);
+}
+.config-add-row input:focus{border-color:var(--accent-blue)}
+.config-add-row input::placeholder{color:var(--text-muted);opacity:0.5}
+.config-field input::placeholder{color:var(--text-muted);opacity:0.5}
+
+/* 发现的子网列表 */
+.discover-list{
+  display:flex;flex-direction:column;gap:6px;margin-top:10px;
+}
+.discover-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px;background:var(--bg-card-alt);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-xs);font-family:var(--font-mono);font-size:0.78rem;
+}
+.discover-item .discover-info{
+  display:flex;align-items:center;gap:12px;color:var(--text-secondary);
+}
+.discover-item .discover-name{color:var(--text-muted);font-size:0.72rem}
+.discover-item .discover-added{color:var(--accent-green);font-size:0.72rem}
+
+/* 原始编辑器 */
+.raw-editor{
+  width:100%;min-height:200px;max-height:400px;resize:vertical;
+  font-family:var(--font-mono);font-size:0.78rem;line-height:1.6;
+  color:var(--text-primary);background:var(--bg-secondary);
+  border:1px solid var(--border-subtle);border-radius:var(--radius-xs);
+  padding:12px 16px;outline:none;
+  transition:border-color var(--transition-fast);
+}
+.raw-editor:focus{border-color:var(--accent-blue)}
+
+/* 确认对话框 */
+.confirm-overlay{
+  position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);
+  display:none;align-items:center;justify-content:center;
+}
+.confirm-overlay.show{display:flex}
+.confirm-dialog{
+  background:var(--bg-card);border:1px solid var(--border-color);
+  border-radius:var(--radius);padding:24px 28px;
+  max-width:400px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,0.4);
+}
+.confirm-title{font-size:1rem;font-weight:600;margin-bottom:10px}
+.confirm-msg{font-size:0.82rem;color:var(--text-secondary);margin-bottom:20px;line-height:1.5}
+.confirm-actions{display:flex;gap:10px;justify-content:flex-end}
+
 /* ===== 响应式 ===== */
 @media(max-width:1024px){
+  .sidebar{width:56px;min-width:56px;padding:12px 0}
+  .sidebar-btn .nav-label{display:none}
+  .sidebar-btn{justify-content:center;padding:10px 8px}
+  .sidebar-btn .nav-icon{width:auto}
+  .sidebar-footer{display:none}
+  .sidebar-divider{margin:8px 8px}
   .hero-stats{grid-template-columns:repeat(2,1fr)}
   .info-bar{grid-template-columns:repeat(2,1fr)}
   .vm-links-grid{grid-template-columns:1fr}
+  .config-columns{grid-template-columns:1fr}
+  .main-header{padding:12px 18px 0}
+  .main-scroll{padding:0 18px 18px}
 }
 @media(max-width:640px){
-  .app{padding:12px 16px 32px}
+  .app-body{flex-direction:column}
+  .sidebar{width:100%;min-width:100%;flex-direction:row;padding:0;border-right:none;border-bottom:1px solid var(--border-subtle);overflow-x:auto;overflow-y:hidden}
+  .sidebar-nav{flex-direction:row;padding:0 8px;gap:0}
+  .sidebar-btn{padding:10px 16px;border-radius:0}
+  .sidebar-btn .nav-label{display:inline}
+  .sidebar-btn.active{border-bottom:2px solid var(--accent-blue);background:none}
+  .sidebar-divider{display:none}
+  .sidebar-footer{display:none}
   .hero-stats{grid-template-columns:1fr}
   .info-bar{grid-template-columns:1fr}
   .summary-pills{flex-direction:column}
   .routes-table th,.routes-table td{padding:7px 10px;font-size:0.7rem}
-  .header{flex-direction:column;gap:12px;align-items:flex-start}
-  .vm-links-grid{grid-template-columns:1fr}
+  .main-header{padding:10px 14px 0}
+  .main-scroll{padding:0 14px 14px}
 }
 </style>
 </head>
@@ -562,77 +751,98 @@ body::after{
     </div>
   </header>
 
-  <!-- Dashboard 主内容 -->
-  <div class="dashboard-grid" id="dashboardGrid">
+  <!-- 主体 = 侧边栏 + 主区域 -->
+  <div class="app-body">
 
-    <!-- === 骨架屏（首次加载显示，数据到达后隐藏） === -->
-    <div id="skeletonView">
-      <div class="hero-stats" style="margin-bottom:16px">
-        <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
-        <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
-        <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
-        <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
-      </div>
-      <div class="section-card"><div class="skeleton skeleton-block"></div></div>
-    </div>
-
-    <!-- === 真实内容（初始隐藏） === -->
-    <div id="realContent" style="display:none">
-
-      <!-- Hero 状态卡片 — 4 个关键指标 -->
-      <div class="hero-stats">
-        <div class="hero-card blue">
-          <div class="hero-label">运行时间</div>
-          <div class="hero-value" id="valUptime">--</div>
-          <div class="hero-sub" id="valUdpPort">--</div>
-        </div>
-        <div class="hero-card green">
-          <div class="hero-label">客户端连接</div>
-          <div class="hero-value" id="valClient">--</div>
-          <div class="hero-sub" id="valClientAddr">&nbsp;</div>
-        </div>
-        <div class="hero-card purple">
-          <div class="hero-label">TUN 接口</div>
-          <div class="hero-value" id="valTun">--</div>
-          <div class="hero-sub" id="valPeerIp">--</div>
-        </div>
-        <div class="hero-card amber">
-          <div class="hero-label">路由总数</div>
-          <div class="hero-value" id="valRouteTotal">--</div>
-          <div class="hero-sub" id="valRouteHealth">--</div>
-        </div>
-      </div>
-
-      <!-- 次要信息栏 -->
-      <div class="info-bar">
-        <div class="info-item">
-          <div class="info-label">Local IP</div>
-          <div class="info-value" id="valLocalIp">--</div>
-        </div>
-        <div class="info-item">
-          <div class="info-label">Peer IP</div>
-          <div class="info-value" id="valPeerIpFull">--</div>
-        </div>
-        <div class="info-item">
-          <div class="info-label">配置文件</div>
-          <div class="info-value" id="valConfigFile">--</div>
-        </div>
-        <div class="info-item">
-          <div class="info-label">接口名称</div>
-          <div class="info-value" id="valTunFull">--</div>
-        </div>
-      </div>
-
-      <!-- Tab 栏 -->
-      <div class="tab-bar">
-        <button class="tab-btn active" data-tab="routes" onclick="switchTab('routes')">
-          &#x1f6e3; Routes
+    <!-- ===== 左侧侧边栏导航 ===== -->
+    <nav class="sidebar">
+      <div class="sidebar-nav">
+        <button class="sidebar-btn active" data-tab="routes" onclick="switchTab('routes')" title="Routes">
+          <span class="nav-icon">&#x1f6e3;</span><span class="nav-label">Routes</span>
         </button>
-        <button class="tab-btn" data-tab="vmlinks" onclick="switchTab('vmlinks')">
-          &#x1f517; VM Links
+        <button class="sidebar-btn" data-tab="config" onclick="switchTab('config')" title="Configuration">
+          <span class="nav-icon">&#x2699;</span><span class="nav-label">Configuration</span>
+        </button>
+        <button class="sidebar-btn" data-tab="vmlinks" onclick="switchTab('vmlinks')" title="VM Links">
+          <span class="nav-icon">&#x1f517;</span><span class="nav-label">VM Links</span>
+        </button>
+      </div>
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-nav">
+        <div style="padding:4px 16px">
           <span class="vm-indicator offline" id="vmTabIndicator"><span class="vm-dot offline"></span>offline</span>
-        </button>
+        </div>
       </div>
+      <div class="sidebar-footer">Docker Connector<br>v2.1</div>
+    </nav>
+
+    <!-- ===== 右侧主区域 ===== -->
+    <div class="main-area">
+
+      <!-- 顶部：Hero + Info（固定不滚动） -->
+      <div class="main-header" id="mainHeader">
+        <!-- 骨架屏 -->
+        <div id="skeletonView">
+          <div class="hero-stats" style="margin-bottom:14px">
+            <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
+            <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
+            <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
+            <div class="hero-card"><div class="skeleton skeleton-line w40" style="margin-bottom:14px"></div><div class="skeleton skeleton-line w60" style="height:24px"></div></div>
+          </div>
+        </div>
+
+        <!-- 真实 Hero + Info -->
+        <div id="realContent" style="display:none">
+          <div class="hero-stats" style="margin-bottom:14px">
+            <div class="hero-card blue">
+              <div class="hero-label">运行时间</div>
+              <div class="hero-value" id="valUptime">--</div>
+              <div class="hero-sub" id="valUdpPort">--</div>
+            </div>
+            <div class="hero-card green">
+              <div class="hero-label">客户端连接</div>
+              <div class="hero-value" id="valClient">--</div>
+              <div class="hero-sub" id="valClientAddr">&nbsp;</div>
+            </div>
+            <div class="hero-card purple">
+              <div class="hero-label">TUN 接口</div>
+              <div class="hero-value" id="valTun">--</div>
+              <div class="hero-sub" id="valPeerIp">--</div>
+            </div>
+            <div class="hero-card amber">
+              <div class="hero-label">路由总数</div>
+              <div class="hero-value" id="valRouteTotal">--</div>
+              <div class="hero-sub" id="valRouteHealth">--</div>
+            </div>
+          </div>
+          <div class="info-bar" style="margin-bottom:14px">
+            <div class="info-item">
+              <div class="info-label">Local IP</div>
+              <div class="info-value" id="valLocalIp">--</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Peer IP</div>
+              <div class="info-value" id="valPeerIpFull">--</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">配置文件</div>
+              <div class="info-value" id="valConfigFile">--</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">接口名称</div>
+              <div class="info-value" id="valTunFull">--</div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /main-header -->
+
+      <!-- Hero 折叠控制栏 -->
+      <div class="hero-toggle-bar" id="heroToggleBar" style="padding:6px 28px">
+        <button class="hero-toggle-btn" id="heroToggleBtn" onclick="toggleHero()">&#x25b2; 折叠状态栏</button>
+      </div>
+
+      <!-- 内容滚动区 -->
+      <div class="main-scroll">
 
       <!-- ===== Routes 面板 ===== -->
       <div class="tab-panel active" id="panelRoutes">
@@ -683,6 +893,146 @@ body::after{
       </div>
 
       </div><!-- /panelRoutes -->
+
+      <!-- ===== Configuration 面板 ===== -->
+      <div class="tab-panel" id="panelConfig">
+        <div class="config-columns">
+        <!-- 左列 -->
+        <div class="config-col">
+        <!-- 基础配置（只读） -->
+        <div class="config-section">
+          <div class="config-section-title"><span class="section-icon">&#x1f4e1;</span> 基础配置</div>
+          <div class="config-warn">&#x26a0;&#xfe0f; 基础配置（addr/port/mtu/host）修改需重启服务才能生效</div>
+          <div class="config-grid" id="cfgBasicGrid">
+            <div class="config-field"><label>addr</label><div class="cfg-val" id="cfgAddr">--</div></div>
+            <div class="config-field"><label>port</label><div class="cfg-val" id="cfgPort">--</div></div>
+            <div class="config-field"><label>mtu</label><div class="cfg-val" id="cfgMtu">--</div></div>
+            <div class="config-field"><label>host</label><div class="cfg-val" id="cfgHost">--</div></div>
+            <div class="config-field">
+              <label>loglevel</label>
+              <select id="cfgLogLevel" onchange="updateBasicConfig()">
+                <option value="DEBUG">DEBUG</option>
+                <option value="INFO" selected>INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+            </div>
+            <div class="config-field">
+              <label>pong</label>
+              <select id="cfgPong" onchange="updateBasicConfig()">
+                <option value="off">off</option>
+                <option value="on">on</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 子网互通 -->
+        <div class="config-section">
+          <div class="config-section-title"><span class="section-icon">&#x1f310;</span> 子网互通 (iptables)</div>
+          <table class="config-table" id="cfgIptablesTable">
+            <thead><tr><th>Subnet A</th><th>Subnet B</th><th>动作</th><th>操作</th></tr></thead>
+            <tbody id="cfgIptablesTbody"></tbody>
+          </table>
+          <div class="empty-state" id="cfgIptablesEmpty" style="display:none">暂无 iptables 规则</div>
+          <div class="config-add-row">
+            <input type="text" id="cfgIptA" placeholder="Subnet A" style="width:140px"/>
+            <span style="color:var(--text-muted)">+</span>
+            <input type="text" id="cfgIptB" placeholder="Subnet B" style="width:140px"/>
+            <button class="btn btn-sm btn-primary" onclick="addIptables()">+ 添加</button>
+          </div>
+        </div>
+
+        <!-- DNS & 代理 -->
+        <div class="config-section">
+          <div class="config-section-title"><span class="section-icon">&#x1f4e1;</span> DNS & 代理</div>
+          <div class="config-grid" style="margin-bottom:12px">
+            <div class="config-field" style="grid-column:1/-1">
+              <label>hosts 配置</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="text" id="cfgHostsInput" placeholder="/etc/hosts .local .inc" style="flex:1"/>
+                <button class="btn btn-sm" onclick="updateHosts()">&#x1f4be; 保存</button>
+              </div>
+            </div>
+          </div>
+          <table class="config-table">
+            <thead><tr><th>Proxy Rule</th><th>操作</th></tr></thead>
+            <tbody id="cfgProxiesTbody"></tbody>
+          </table>
+          <div class="empty-state" id="cfgProxiesEmpty" style="display:none">暂无代理规则</div>
+          <div class="config-add-row">
+            <input type="text" id="cfgProxyInput" placeholder="127.0.0.1:80:80" style="width:200px"/>
+            <button class="btn btn-sm btn-primary" onclick="addProxy()">+ 添加代理</button>
+          </div>
+        </div>
+        </div><!-- /config-col 左列 -->
+
+        <!-- 右列 -->
+        <div class="config-col">
+        <!-- 路由管理 -->
+        <div class="config-section">
+          <div class="config-section-title"><span class="section-icon">&#x1f6e3;</span> 路由管理</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <button class="btn btn-sm btn-success" onclick="discoverSubnets()">&#x1f50d; 自动发现 Docker 子网</button>
+          </div>
+          <div id="cfgDiscoverList" class="discover-list" style="display:none"></div>
+          <table class="config-table" id="cfgRoutesTable">
+            <thead><tr><th>Network (CIDR)</th><th>Expose</th><th>操作</th></tr></thead>
+            <tbody id="cfgRoutesTbody"></tbody>
+          </table>
+          <div class="empty-state" id="cfgRoutesEmpty" style="display:none">暂无路由配置</div>
+          <div class="config-add-row">
+            <input type="text" id="cfgRouteInput" placeholder="172.17.0.0/16" style="width:160px"/>
+            <label style="font-size:0.74rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px">
+              <input type="checkbox" id="cfgRouteExpose"/> expose
+            </label>
+            <button class="btn btn-sm btn-primary" onclick="addRoute()">+ 添加</button>
+          </div>
+        </div>
+
+        <!-- 导出与令牌 -->
+        <div class="config-section">
+          <div class="config-section-title"><span class="section-icon">&#x1f511;</span> 导出与令牌</div>
+          <div class="config-grid" style="margin-bottom:12px">
+            <div class="config-field">
+              <label>expose 地址</label>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:nowrap">
+                <input type="text" id="cfgExposeInput" placeholder="0.0.0.0:2512" style="flex:1;min-width:120px"/>
+                <button class="btn btn-sm" onclick="updateExpose()">&#x1f4be; 保存</button>
+              </div>
+            </div>
+          </div>
+          <table class="config-table">
+            <thead><tr><th>Name</th><th>Virtual IP</th><th>操作</th></tr></thead>
+            <tbody id="cfgTokensTbody"></tbody>
+          </table>
+          <div class="empty-state" id="cfgTokensEmpty" style="display:none">暂无令牌</div>
+          <div class="config-add-row">
+            <input type="text" id="cfgTokenName" placeholder="名称" style="width:100px"/>
+            <input type="text" id="cfgTokenIp" placeholder="虚拟 IP" style="width:140px"/>
+            <button class="btn btn-sm btn-primary" onclick="addToken()">+ 添加</button>
+          </div>
+        </div>
+
+        <!-- 原始配置编辑器 -->
+        <div class="config-section">
+          <div class="config-section-title" style="cursor:pointer" onclick="toggleRawEditor()">
+            <span class="section-icon">&#x1f4dd;</span> 原始配置文件
+            <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400" id="rawEditorToggle">&#x25b6; 展开</span>
+          </div>
+          <div id="rawEditorContainer" style="display:none">
+            <textarea class="raw-editor" id="cfgRawEditor" spellcheck="false"></textarea>
+            <div style="display:flex;gap:10px;margin-top:10px;align-items:center">
+              <button class="btn btn-primary btn-sm" onclick="saveRawConfig()">&#x1f4be; 保存配置文件</button>
+              <button class="btn btn-sm" onclick="loadConfigTab()">&#x21bb; 重新加载</button>
+              <span style="font-size:0.72rem;color:var(--text-muted)" id="rawEditorHint"></span>
+            </div>
+          </div>
+        </div>
+        </div><!-- /config-col 右列 -->
+
+        </div><!-- /config-columns -->
+      </div><!-- /panelConfig -->
 
       <!-- ===== VM Links 面板 ===== -->
       <div class="tab-panel" id="panelVmlinks">
@@ -795,12 +1145,25 @@ body::after{
         </div>
       </div><!-- /panelVmlinks -->
 
-    </div><!-- /realContent -->
-  </div>
-</div>
+      </div><!-- /main-scroll -->
+    </div><!-- /main-area -->
+  </div><!-- /app-body -->
+</div><!-- /app -->
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+
+<!-- 确认对话框 -->
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-dialog">
+    <div class="confirm-title" id="confirmTitle">确认操作</div>
+    <div class="confirm-msg" id="confirmMsg"></div>
+    <div class="confirm-actions">
+      <button class="btn" onclick="confirmCancel()">取消</button>
+      <button class="btn btn-primary" id="confirmOkBtn" onclick="confirmOk()">确定</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -1116,20 +1479,495 @@ body::after{
   let currentTab = 'routes';
 
   // Tab 切换
+  let heroCollapsed = false; // Hero 折叠状态
   function switchTab(tab) {
     currentTab = tab;
-    document.querySelectorAll('.tab-btn').forEach(b => {
+    // 更新侧边栏按钮状态
+    document.querySelectorAll('.sidebar-btn[data-tab]').forEach(b => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
     document.querySelectorAll('.tab-panel').forEach(p => {
       p.classList.toggle('active', p.id === 'panel' + tab.charAt(0).toUpperCase() + tab.slice(1));
     });
+
+    // Hero/Info 区域：仅在 Routes Tab 显示
+    const mainHeader = $('mainHeader');
+    const heroToggleBar = $('heroToggleBar');
+    if (mainHeader) {
+      if (tab === 'routes') {
+        mainHeader.classList.toggle('collapsed', heroCollapsed);
+        if (heroToggleBar) heroToggleBar.style.display = '';
+      } else {
+        mainHeader.classList.add('collapsed');
+        if (heroToggleBar) heroToggleBar.style.display = 'none';
+      }
+    }
+
     // 首次打开 VM Links 面板时检测并连接 SSE
     if (tab === 'vmlinks') {
       checkVMAndConnect();
     }
+    // 打开 Configuration 面板时加载配置
+    if (tab === 'config') {
+      loadConfigTab();
+    }
   }
   window.switchTab = switchTab;
+
+  // Hero 区域折叠/展开
+  function toggleHero() {
+    heroCollapsed = !heroCollapsed;
+    const mainHeader = $('mainHeader');
+    const btn = $('heroToggleBtn');
+    if (mainHeader) mainHeader.classList.toggle('collapsed', heroCollapsed);
+    if (btn) btn.innerHTML = heroCollapsed ? '&#x25bc; 展开状态栏' : '&#x25b2; 折叠状态栏';
+  }
+  window.toggleHero = toggleHero;
+
+  // ========== Configuration 模块 ==========
+  let cfgData = null; // 缓存配置数据
+  let confirmCallback = null; // 确认对话框回调
+
+  // 加载配置数据
+  async function loadConfigTab() {
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      cfgData = await res.json();
+      renderConfig(cfgData);
+    } catch(e) {
+      showToast('获取配置失败: ' + e.message, 'error');
+    }
+  }
+
+  // 渲染配置数据到 UI
+  function renderConfig(cfg) {
+    if (!cfg) return;
+    // 基础配置
+    updateText('cfgAddr', cfg.basic.addr || '--');
+    updateText('cfgPort', String(cfg.basic.port || '--'));
+    updateText('cfgMtu', String(cfg.basic.mtu || '--'));
+    updateText('cfgHost', cfg.basic.host || '--');
+    const logSel = $('cfgLogLevel');
+    if (logSel) logSel.value = (cfg.basic.loglevel || 'INFO').toUpperCase();
+    const pongSel = $('cfgPong');
+    if (pongSel) pongSel.value = cfg.basic.pong ? 'on' : 'off';
+
+    // 路由表
+    renderConfigRoutes(cfg.routes || []);
+    // iptables
+    renderConfigIptables(cfg.iptables || []);
+    // expose
+    const expInput = $('cfgExposeInput');
+    if (expInput) expInput.value = cfg.expose || '';
+    // tokens
+    renderConfigTokens(cfg.tokens || []);
+    // hosts
+    const hostsInput = $('cfgHostsInput');
+    if (hostsInput) hostsInput.value = cfg.hosts || '';
+    // proxies
+    renderConfigProxies(cfg.proxies || []);
+  }
+
+  // 渲染路由配置表
+  function renderConfigRoutes(routes) {
+    const tbody = $('cfgRoutesTbody');
+    const empty = $('cfgRoutesEmpty');
+    if (!tbody) return;
+    if (!routes || routes.length === 0) {
+      tbody.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    tbody.innerHTML = '';
+    for (const r of routes) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + esc(r.network) + '</td>' +
+        '<td>' + (r.expose ? '<span style="color:var(--accent-green)">&#x2713; Yes</span>' : '<span class="muted">No</span>') + '</td>' +
+        '<td><button class="btn btn-sm btn-danger" onclick="deleteRoute(\'' + esc(r.network) + '\')">&#x1f5d1; 删除</button></td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  // 渲染 iptables 配置表
+  function renderConfigIptables(rules) {
+    const tbody = $('cfgIptablesTbody');
+    const empty = $('cfgIptablesEmpty');
+    if (!tbody) return;
+    if (!rules || rules.length === 0) {
+      tbody.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    tbody.innerHTML = '';
+    for (const r of rules) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + esc(r.subnet_a) + '</td>' +
+        '<td>' + esc(r.subnet_b) + '</td>' +
+        '<td><span style="color:' + (r.action==='connect' ? 'var(--accent-green)' : 'var(--accent-red)') + '">' + esc(r.action) + '</span></td>' +
+        '<td><button class="btn btn-sm btn-danger" onclick="deleteIptables(\'' + esc(r.subnet_a) + '\',\'' + esc(r.subnet_b) + '\')">&#x1f5d1; 删除</button></td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  // 渲染 token 配置表
+  function renderConfigTokens(tokens) {
+    const tbody = $('cfgTokensTbody');
+    const empty = $('cfgTokensEmpty');
+    if (!tbody) return;
+    if (!tokens || tokens.length === 0) {
+      tbody.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    tbody.innerHTML = '';
+    for (const t of tokens) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + esc(t.name) + '</td>' +
+        '<td>' + esc(t.ip) + '</td>' +
+        '<td><button class="btn btn-sm btn-danger" onclick="deleteToken(\'' + esc(t.name) + '\')">&#x1f5d1; 删除</button></td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  // 渲染 proxy 配置表
+  function renderConfigProxies(proxies) {
+    const tbody = $('cfgProxiesTbody');
+    const empty = $('cfgProxiesEmpty');
+    if (!tbody) return;
+    if (!proxies || proxies.length === 0) {
+      tbody.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    tbody.innerHTML = '';
+    for (const p of proxies) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + esc(p) + '</td>' +
+        '<td><button class="btn btn-sm btn-danger" onclick="deleteProxy(\'' + esc(p) + '\')">&#x1f5d1; 删除</button></td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  // === 路由操作 ===
+  async function addRoute() {
+    const input = $('cfgRouteInput');
+    const exposeBox = $('cfgRouteExpose');
+    if (!input || !input.value.trim()) { showToast('请输入 CIDR 地址', 'error'); return; }
+    try {
+      const res = await fetch('/api/config/route', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({network: input.value.trim(), expose: exposeBox && exposeBox.checked})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message, 'success');
+        input.value = '';
+        if (exposeBox) exposeBox.checked = false;
+        setTimeout(loadConfigTab, 500);
+      } else {
+        showToast(data.message, 'error');
+      }
+    } catch(e) { showToast('添加路由失败: ' + e.message, 'error'); }
+  }
+  window.addRoute = addRoute;
+
+  function deleteRoute(network) {
+    showConfirm('删除路由', '确定要删除路由 ' + network + '？删除后热加载将在 2 秒内生效。', async function() {
+      try {
+        const res = await fetch('/api/config/route', {
+          method: 'DELETE', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({network: network})
+        });
+        const data = await res.json();
+        if (data.ok) { showToast(data.message, 'success'); setTimeout(loadConfigTab, 500); }
+        else showToast(data.message, 'error');
+      } catch(e) { showToast('删除失败: ' + e.message, 'error'); }
+    });
+  }
+  window.deleteRoute = deleteRoute;
+
+  // === iptables 操作 ===
+  async function addIptables() {
+    const a = $('cfgIptA'), b = $('cfgIptB');
+    if (!a || !b || !a.value.trim() || !b.value.trim()) { showToast('请输入两个子网', 'error'); return; }
+    try {
+      const res = await fetch('/api/config/iptables', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({subnet_a: a.value.trim(), subnet_b: b.value.trim()})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message, 'success');
+        a.value = ''; b.value = '';
+        setTimeout(loadConfigTab, 500);
+      } else showToast(data.message, 'error');
+    } catch(e) { showToast('添加失败: ' + e.message, 'error'); }
+  }
+  window.addIptables = addIptables;
+
+  function deleteIptables(sa, sb) {
+    showConfirm('删除互通规则', '确定要删除 ' + sa + ' ↔ ' + sb + ' 的互通规则？', async function() {
+      try {
+        const res = await fetch('/api/config/iptables', {
+          method: 'DELETE', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({subnet_a: sa, subnet_b: sb})
+        });
+        const data = await res.json();
+        if (data.ok) { showToast(data.message, 'success'); setTimeout(loadConfigTab, 500); }
+        else showToast(data.message, 'error');
+      } catch(e) { showToast('删除失败: ' + e.message, 'error'); }
+    });
+  }
+  window.deleteIptables = deleteIptables;
+
+  // === expose 操作 ===
+  async function updateExpose() {
+    const input = $('cfgExposeInput');
+    try {
+      const res = await fetch('/api/config/expose', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({address: input ? input.value.trim() : ''})
+      });
+      const data = await res.json();
+      if (data.ok) showToast(data.message, 'success');
+      else showToast(data.message, 'error');
+    } catch(e) { showToast('更新失败: ' + e.message, 'error'); }
+  }
+  window.updateExpose = updateExpose;
+
+  // === token 操作 ===
+  async function addToken() {
+    const name = $('cfgTokenName'), ip = $('cfgTokenIp');
+    if (!name || !ip || !name.value.trim() || !ip.value.trim()) { showToast('请输入名称和 IP', 'error'); return; }
+    try {
+      const res = await fetch('/api/config/token', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name: name.value.trim(), ip: ip.value.trim()})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message, 'success');
+        name.value = ''; ip.value = '';
+        setTimeout(loadConfigTab, 500);
+      } else showToast(data.message, 'error');
+    } catch(e) { showToast('添加失败: ' + e.message, 'error'); }
+  }
+  window.addToken = addToken;
+
+  function deleteToken(tokenName) {
+    showConfirm('删除令牌', '确定要删除令牌 ' + tokenName + '？', async function() {
+      try {
+        const res = await fetch('/api/config/token', {
+          method: 'DELETE', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({name: tokenName})
+        });
+        const data = await res.json();
+        if (data.ok) { showToast(data.message, 'success'); setTimeout(loadConfigTab, 500); }
+        else showToast(data.message, 'error');
+      } catch(e) { showToast('删除失败: ' + e.message, 'error'); }
+    });
+  }
+  window.deleteToken = deleteToken;
+
+  // === hosts 操作 ===
+  async function updateHosts() {
+    const input = $('cfgHostsInput');
+    try {
+      const res = await fetch('/api/config/hosts', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({value: input ? input.value.trim() : ''})
+      });
+      const data = await res.json();
+      if (data.ok) showToast(data.message, 'success');
+      else showToast(data.message, 'error');
+    } catch(e) { showToast('更新失败: ' + e.message, 'error'); }
+  }
+  window.updateHosts = updateHosts;
+
+  // === proxy 操作 ===
+  async function addProxy() {
+    const input = $('cfgProxyInput');
+    if (!input || !input.value.trim()) { showToast('请输入代理规则', 'error'); return; }
+    try {
+      const res = await fetch('/api/config/proxy', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({rule: input.value.trim()})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message, 'success');
+        input.value = '';
+        setTimeout(loadConfigTab, 500);
+      } else showToast(data.message, 'error');
+    } catch(e) { showToast('添加失败: ' + e.message, 'error'); }
+  }
+  window.addProxy = addProxy;
+
+  function deleteProxy(rule) {
+    showConfirm('删除代理', '确定要删除代理规则 ' + rule + '？', async function() {
+      try {
+        const res = await fetch('/api/config/proxy', {
+          method: 'DELETE', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({rule: rule})
+        });
+        const data = await res.json();
+        if (data.ok) { showToast(data.message, 'success'); setTimeout(loadConfigTab, 500); }
+        else showToast(data.message, 'error');
+      } catch(e) { showToast('删除失败: ' + e.message, 'error'); }
+    });
+  }
+  window.deleteProxy = deleteProxy;
+
+  // === 基础配置更新 ===
+  async function updateBasicConfig() {
+    const logLevel = $('cfgLogLevel');
+    const pongSel = $('cfgPong');
+    try {
+      const res = await fetch('/api/config/basic', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          loglevel: logLevel ? logLevel.value : undefined,
+          pong: pongSel ? pongSel.value === 'on' : undefined
+        })
+      });
+      const data = await res.json();
+      if (data.ok) showToast(data.message, 'success');
+      else showToast(data.message, 'error');
+    } catch(e) { showToast('更新失败: ' + e.message, 'error'); }
+  }
+  window.updateBasicConfig = updateBasicConfig;
+
+  // === Docker 子网发现 ===
+  async function discoverSubnets() {
+    const list = $('cfgDiscoverList');
+    if (!list) return;
+    list.style.display = '';
+    list.innerHTML = '<div class="muted" style="padding:8px">正在发现 Docker 子网...</div>';
+    try {
+      const res = await fetch('/api/config/discover');
+      const data = await res.json();
+      if (!data.ok && data.message) {
+        list.innerHTML = '<div style="padding:8px;color:var(--accent-red)">' + esc(data.message) + '</div>';
+        return;
+      }
+      const networks = data.networks || [];
+      if (networks.length === 0) {
+        list.innerHTML = '<div class="muted" style="padding:8px">未发现 Docker bridge 子网</div>';
+        return;
+      }
+      list.innerHTML = '';
+      for (const n of networks) {
+        const item = document.createElement('div');
+        item.className = 'discover-item';
+        if (n.added) {
+          item.innerHTML =
+            '<div class="discover-info"><span>' + esc(n.network) + '</span><span class="discover-name">' + esc(n.name) + '</span></div>' +
+            '<span class="discover-added">&#x2713; 已添加</span>';
+        } else {
+          item.innerHTML =
+            '<div class="discover-info"><span>' + esc(n.network) + '</span><span class="discover-name">' + esc(n.name) + '</span></div>' +
+            '<button class="btn btn-sm btn-success" onclick="quickAddRoute(\'' + esc(n.network) + '\')">+ 添加</button>';
+        }
+        list.appendChild(item);
+      }
+    } catch(e) {
+      list.innerHTML = '<div style="padding:8px;color:var(--accent-red)">发现失败: ' + esc(e.message) + '</div>';
+    }
+  }
+  window.discoverSubnets = discoverSubnets;
+
+  async function quickAddRoute(network) {
+    try {
+      const res = await fetch('/api/config/route', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({network: network, expose: false})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message, 'success');
+        setTimeout(function() { loadConfigTab(); discoverSubnets(); }, 500);
+      } else showToast(data.message, 'error');
+    } catch(e) { showToast('添加失败: ' + e.message, 'error'); }
+  }
+  window.quickAddRoute = quickAddRoute;
+
+  // === 原始编辑器 ===
+  function toggleRawEditor() {
+    const container = $('rawEditorContainer');
+    const toggle = $('rawEditorToggle');
+    if (!container) return;
+    const hidden = container.style.display === 'none';
+    container.style.display = hidden ? '' : 'none';
+    if (toggle) toggle.innerHTML = hidden ? '&#x25bc; 折叠' : '&#x25b6; 展开';
+    if (hidden) loadRawConfig();
+  }
+  window.toggleRawEditor = toggleRawEditor;
+
+  async function loadRawConfig() {
+    const editor = $('cfgRawEditor');
+    if (!editor) return;
+    try {
+      const res = await fetch('/api/config/raw');
+      const data = await res.json();
+      editor.value = data.content || '';
+    } catch(e) { editor.value = '// 加载失败: ' + e.message; }
+  }
+
+  async function saveRawConfig() {
+    const editor = $('cfgRawEditor');
+    if (!editor) return;
+    showConfirm('覆盖配置文件', '确定要用编辑器内容覆盖整个配置文件？此操作将自动备份原文件为 .bak。', async function() {
+      try {
+        const res = await fetch('/api/config/raw', {
+          method: 'PUT', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({content: editor.value})
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast(data.message, 'success');
+          const hint = $('rawEditorHint');
+          if (hint) hint.textContent = '已保存 ' + new Date().toLocaleTimeString();
+          setTimeout(loadConfigTab, 500);
+        } else showToast(data.message, 'error');
+      } catch(e) { showToast('保存失败: ' + e.message, 'error'); }
+    });
+  }
+  window.saveRawConfig = saveRawConfig;
+
+  // === 确认对话框 ===
+  function showConfirm(title, msg, callback) {
+    const overlay = $('confirmOverlay');
+    const titleEl = $('confirmTitle');
+    const msgEl = $('confirmMsg');
+    if (!overlay) { callback(); return; }
+    titleEl.textContent = title;
+    msgEl.textContent = msg;
+    confirmCallback = callback;
+    overlay.className = 'confirm-overlay show';
+  }
+
+  function confirmOk() {
+    const overlay = $('confirmOverlay');
+    if (overlay) overlay.className = 'confirm-overlay';
+    if (confirmCallback) { confirmCallback(); confirmCallback = null; }
+  }
+  window.confirmOk = confirmOk;
+
+  function confirmCancel() {
+    const overlay = $('confirmOverlay');
+    if (overlay) overlay.className = 'confirm-overlay';
+    confirmCallback = null;
+  }
+  window.confirmCancel = confirmCancel;
 
   // 检测 VM 状态并连接 SSE
   async function checkVMAndConnect() {
