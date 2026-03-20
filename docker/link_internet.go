@@ -36,7 +36,7 @@ func (l *InternetLink) rules() []ruleInfo {
 			},
 			ruleInfo{
 				Table: "filter", Chain: "FORWARD",
-				Rule:  []string{"-i", physicalIf, "-o", bridge.Name, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+Rule:  []string{"-i", physicalIf, "-o", bridge.Name, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 				Label: fmt.Sprintf("FORWARD %s → %s (ESTABLISHED)", physicalIf, bridge.Name),
 			},
 			ruleInfo{

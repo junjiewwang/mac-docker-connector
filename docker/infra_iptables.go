@@ -150,6 +150,9 @@ func (m *IptablesManager) loadCache(table, chain string) {
 }
 
 // ruleExistsInCache 从缓存中检查规则是否存在
+// 使用逐行精确匹配（而非子串匹配），避免误判：
+// 例如查 "-o br-xxx -m conntrack ..." 时不会误匹配到
+// "-A FORWARD -i br-yyy -o br-xxx -m conntrack ..."
 func (m *IptablesManager) ruleExistsInCache(table, chain string, rule []string) bool {
 	key := table + ":" + chain
 	cached, ok := m.cache[key]
@@ -157,8 +160,14 @@ func (m *IptablesManager) ruleExistsInCache(table, chain string, rule []string) 
 		m.loadCache(table, chain)
 		cached = m.cache[key]
 	}
-	ruleStr := strings.Join(rule, " ")
-	return strings.Contains(cached, ruleStr)
+	// 构造 iptables -S 输出中的完整行格式："-A CHAIN rule..."
+	target := "-A " + chain + " " + strings.Join(rule, " ")
+	for _, line := range strings.Split(cached, "\n") {
+		if strings.TrimSpace(line) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Commit 批量提交所有待添加的规则

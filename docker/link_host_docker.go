@@ -34,7 +34,7 @@ func (l *HostDockerLink) rules() []ruleInfo {
 			},
 			ruleInfo{
 				Table: "filter", Chain: "FORWARD",
-				Rule:  []string{"-i", bridge.Name, "-o", "tun0", "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+Rule:  []string{"-i", bridge.Name, "-o", "tun0", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 				Label: fmt.Sprintf("FORWARD %s → tun0 (ESTABLISHED)", bridge.Name),
 			},
 		)

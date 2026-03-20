@@ -36,7 +36,7 @@ func (l *HostK8sLink) serviceRules() []ruleInfo {
 		},
 		{
 			Table: "filter", Chain: "FORWARD",
-			Rule:  []string{"-i", mkInfo.BridgeName, "-o", "tun0", "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+Rule:  []string{"-i", mkInfo.BridgeName, "-o", "tun0", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 			Label: fmt.Sprintf("FORWARD %s → tun0 (ESTABLISHED)", mkInfo.BridgeName),
 		},
 	}
@@ -149,7 +149,7 @@ func (l *HostK8sLink) Status(subLevel string) []LinkStatus {
 		// Service 路由检查
 		if mkInfo != nil && mkInfo.ServiceCIDR != "" {
 			ok := l.mgr.routeMgr.RouteExists(mkInfo.ServiceCIDR, mkInfo.ContainerIP)
-			st.AppendCheck(fmt.Sprintf("route %s via %s", mkInfo.ServiceCIDR, mkInfo.ContainerIP), ok)
+			st.AppendCheckTyped(fmt.Sprintf("route %s via %s", mkInfo.ServiceCIDR, mkInfo.ContainerIP), ok, "route")
 		}
 
 		// DNS 检查
@@ -157,7 +157,7 @@ func (l *HostK8sLink) Status(subLevel string) []LinkStatus {
 		if dnsIP == "" {
 			dnsIP = "N/A"
 		}
-		st.AppendCheck(fmt.Sprintf("DNS config (%s)", dnsIP), dnsOK)
+		st.AppendCheckTyped(fmt.Sprintf("DNS config (%s)", dnsIP), dnsOK, "dns")
 
 		st.ComputeStatus()
 		results = append(results, st)
@@ -171,7 +171,7 @@ func (l *HostK8sLink) Status(subLevel string) []LinkStatus {
 		// Pod 路由检查
 		if mkInfo != nil && mkInfo.PodCIDR != "" {
 			ok := l.mgr.routeMgr.RouteExists(mkInfo.PodCIDR, mkInfo.ContainerIP)
-			st.AppendCheck(fmt.Sprintf("route %s via %s", mkInfo.PodCIDR, mkInfo.ContainerIP), ok)
+			st.AppendCheckTyped(fmt.Sprintf("route %s via %s", mkInfo.PodCIDR, mkInfo.ContainerIP), ok, "route")
 		}
 
 		st.ComputeStatus()
