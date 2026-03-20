@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -98,7 +99,8 @@ func (n *NetworkInfoProvider) GetDockerBridges() []BridgeInfo {
 	}
 
 	// 一次性 inspect 所有网络，减少子进程调用次数
-	inspectFmt := `{{.ID}}|{{index .Options "com.docker.network.bridge.name"}}|{{range .IPAM.Config}}{{.Subnet}}{{end}}`
+	// 使用逗号分隔多个 IPAM Config（IPv4+IPv6 双栈场景），避免多 CIDR 拼接为无效字符串
+	inspectFmt := `{{.ID}}|{{index .Options "com.docker.network.bridge.name"}}|{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{$c.Subnet}}{{end}}`
 	args := append([]string{"docker", "network", "inspect"}, networkIDs...)
 	args = append(args, "--format", inspectFmt)
 
@@ -114,7 +116,7 @@ func (n *NetworkInfoProvider) GetDockerBridges() []BridgeInfo {
 		}
 		nid := strings.TrimSpace(parts[0])
 		bridgeName := strings.TrimSpace(parts[1])
-		subnet := strings.TrimSpace(parts[2])
+		subnetRaw := strings.TrimSpace(parts[2])
 
 		if bridgeName == "" || bridgeName == "<no value>" {
 			idLen := 12
@@ -129,6 +131,8 @@ func (n *NetworkInfoProvider) GetDockerBridges() []BridgeInfo {
 			continue
 		}
 
+		// 从可能的多个 CIDR（逗号分隔）中提取第一个合法的 IPv4 CIDR
+		subnet := extractFirstIPv4CIDR(subnetRaw)
 		if subnet != "" {
 			bridges = append(bridges, BridgeInfo{
 				Name:      bridgeName,
@@ -167,7 +171,8 @@ func (n *NetworkInfoProvider) GetMinikubeInfo() *MinikubeInfo {
 	containerIP := strings.TrimSpace(parts[1])
 
 	// 单次 network inspect 获取 bridge name 与 subnet
-	inspectFmt := `{{index .Options "com.docker.network.bridge.name"}}|{{range .IPAM.Config}}{{.Subnet}}{{end}}`
+	// 使用逗号分隔多个 IPAM Config（IPv4+IPv6 双栈场景）
+	inspectFmt := `{{index .Options "com.docker.network.bridge.name"}}|{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{$c.Subnet}}{{end}}`
 	out, err = runCommand("docker", "network", "inspect", networkID, "--format", inspectFmt)
 	if err != nil || !strings.Contains(out, "|") {
 		return nil
@@ -177,7 +182,8 @@ func (n *NetworkInfoProvider) GetMinikubeInfo() *MinikubeInfo {
 		return nil
 	}
 	bridgeName := strings.TrimSpace(parts[0])
-	subnet := strings.TrimSpace(parts[1])
+	// 从可能的多个 CIDR（逗号分隔）中提取第一个合法的 IPv4 CIDR
+	subnet := extractFirstIPv4CIDR(strings.TrimSpace(parts[1]))
 
 	if bridgeName == "" || bridgeName == "<no value>" {
 		idLen := 12
@@ -361,5 +367,42 @@ func (n *NetworkInfoProvider) getPodCIDR() string {
 	if debug {
 		fmt.Println("[NETWORK] 无法获取 Pod CIDR")
 	}
+	return ""
+}
+
+// extractFirstIPv4CIDR 从可能包含多个 CIDR（逗号分隔）的字符串中提取第一个合法的 IPv4 CIDR
+// 例如输入 "192.168.49.0/24,fc00:f853:ccd:e793::/64" 返回 "192.168.49.0/24"
+// 如果输入没有逗号分隔符（旧格式拼接），也尝试通过正则提取
+func extractFirstIPv4CIDR(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	// 优先按逗号分隔，取第一个合法的 IPv4 CIDR
+	for _, cidr := range strings.Split(raw, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		ip, _, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		// 只保留 IPv4
+		if ip.To4() != nil {
+			return cidr
+		}
+	}
+
+	// 兜底：如果没有逗号分隔（可能是旧格式拼接），用正则提取第一个 IPv4 CIDR
+	re := regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2})`)
+	match := re.FindString(raw)
+	if match != "" {
+		_, _, err := net.ParseCIDR(match)
+		if err == nil {
+			return match
+		}
+	}
+
 	return ""
 }

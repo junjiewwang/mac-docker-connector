@@ -42,6 +42,7 @@ func (s *VMHTTPServer) Start() error {
 	mux.HandleFunc("/api/apply", s.handleApply)
 	mux.HandleFunc("/api/revert", s.handleRevert)
 	mux.HandleFunc("/api/network/info", s.handleNetworkInfo)
+	mux.HandleFunc("/api/docker/subnets", s.handleDockerSubnets)
 	mux.HandleFunc("/api/health", s.handleHealth)
 
 	listenAddr := fmt.Sprintf("%s:%d", s.localIP, s.port)
@@ -224,6 +225,47 @@ func (s *VMHTTPServer) handleNetworkInfo(w http.ResponseWriter, r *http.Request)
 		"bridges":           bridges,
 		"minikube":          mkInfo,
 		"time":              time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleDockerSubnets 返回所有 Docker bridge 网络的子网列表
+// GET /api/docker/subnets
+// 供 Desktop 端自动发现 Docker 子网使用
+func (s *VMHTTPServer) handleDockerSubnets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		s.writeError(w, http.StatusMethodNotAllowed, "仅支持 GET 方法")
+		return
+	}
+
+	bridges := s.linkMgr.Bridges()
+
+	// 转换为 Desktop 端兼容的格式
+	type SubnetInfo struct {
+		Network string `json:"network"` // 子网 CIDR
+		Name    string `json:"name"`    // Docker 网络名称/网桥名称
+		Driver  string `json:"driver"`  // 驱动类型
+	}
+
+	var subnets []SubnetInfo
+	for _, b := range bridges {
+		// 验证子网 CIDR 合法性，过滤异常数据
+		_, ipNet, err := net.ParseCIDR(b.Subnet)
+		if err != nil {
+			if debug {
+				fmt.Printf("[VM-HTTP] 跳过非法 CIDR: %s (%s)\n", b.Subnet, b.Name)
+			}
+			continue
+		}
+		subnets = append(subnets, SubnetInfo{
+			Network: ipNet.String(), // 使用标准化后的 CIDR 格式
+			Name:    b.Name,
+			Driver:  "bridge",
+		})
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"subnets": subnets,
 	})
 }
 
