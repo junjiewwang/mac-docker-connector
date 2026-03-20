@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -16,6 +18,17 @@ import (
 	"github.com/op/go-logging"
 	"github.com/songgao/water"
 )
+
+// bufPool 复用 UDP 缓冲区，避免每次分配 + GC 压力
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
+
+// lastHeartbeat 记录最后一次收到心跳的时间（UnixNano），用于超时检测
+var lastHeartbeat int64
 
 type Connector struct {
 	iface *water.Interface
@@ -207,9 +220,9 @@ func (c *Connector) run() {
 	// 输出网络诊断信息
 	logNetworkDiagnostics(iface)
 
-	// 启动定期网络状态检查
+	// 启动定期网络状态检查 + 心跳超时检测
 	go func() {
-		ticker := time.NewTicker(30 * time.Second) // 每30秒检查一次
+		ticker := time.NewTicker(15 * time.Second) // 每15秒检查一次
 		defer ticker.Stop()
 
 		for {
@@ -221,6 +234,14 @@ func (c *Connector) run() {
 						logger.Warningf("[HEALTH CHECK] No client connected - waiting for connection")
 					} else {
 						logger.Debugf("[HEALTH CHECK] Client connected: %v", cli)
+						// 心跳超时检测：如果 15 秒内没收到心跳，告警
+						last := atomic.LoadInt64(&lastHeartbeat)
+						if last > 0 {
+							silence := time.Since(time.Unix(0, last))
+							if silence > 15*time.Second {
+								logger.Warningf("[HEARTBEAT] No heartbeat from client for %v (last: %v)", silence.Round(time.Second), time.Unix(0, last).Format("15:04:05"))
+							}
+						}
 					}
 					if iface == nil {
 						logger.Warningf("[HEALTH CHECK] TUN interface not available")
@@ -238,7 +259,9 @@ func (c *Connector) run() {
 			logger.Info("not bind to interface")
 			return
 		}
-		buf := make([]byte, 2000)
+		bufPtr := bufPool.Get().(*[]byte)
+		buf := *bufPtr
+		defer bufPool.Put(bufPtr)
 		for {
 			n, err := iface.Read(buf)
 			if err != nil {
@@ -249,8 +272,10 @@ func (c *Connector) run() {
 				continue
 			}
 
-			// 记录详细的数据包信息
-			logPacketDetails(buf, n, "TUN->UDP")
+			// 记录详细的数据包信息（日志守卫：仅 DEBUG 级别才解析）
+			if logger.IsEnabledFor(logging.DEBUG) {
+				logPacketDetails(buf, n, "TUN->UDP")
+			}
 
 			if localIP[0] == buf[16] && localIP[1] == buf[17] && localIP[2] == buf[18] && localIP[3] == buf[19] {
 				logger.Debugf("[LOCAL LOOPBACK] Packet to local IP: %d.%d.%d.%d", localIP[0], localIP[1], localIP[2], localIP[3])
@@ -275,7 +300,9 @@ func (c *Connector) run() {
 	}()
 	var lastCli string
 	var n int
-	data := make([]byte, 2000)
+	dataPtr := bufPool.Get().(*[]byte)
+	data := *dataPtr
+	defer bufPool.Put(dataPtr)
 	logger.Infof("[UDP LISTENER] Starting UDP packet processing loop, listening on %v", conn.LocalAddr())
 
 	for {
@@ -292,6 +319,8 @@ func (c *Connector) run() {
 
 		// 处理心跳包
 		if data[0] == 0 && n == 1 {
+			// 记录心跳时间（用于超时检测）
+			atomic.StoreInt64(&lastHeartbeat, time.Now().UnixNano())
 			if lastCli == cli.String() {
 				logger.Debugf("[HEARTBEAT] Client heartbeat => %v", cli)
 			} else {
@@ -321,8 +350,8 @@ func (c *Connector) run() {
 			continue
 		}
 
-		// 记录详细的数据包信息
-		if n > 1 { // 排除心跳包和控制包
+		// 记录详细的数据包信息（日志守卫：仅 DEBUG 级别才解析）
+		if n > 1 && logger.IsEnabledFor(logging.DEBUG) {
 			logPacketDetails(data, n, "UDP->TUN")
 		}
 
@@ -413,6 +442,7 @@ func logNetworkDiagnostics(iface *water.Interface) {
 }
 
 // 解析并记录数据包详细信息
+// 注意：调用方已通过 logger.IsEnabledFor(logging.DEBUG) 前置检查，此处不再重复检查
 func logPacketDetails(data []byte, n int, direction string) {
 	if n < 20 {
 		logger.Debugf("[PACKET %s] Packet too small: %d bytes", direction, n)
@@ -509,20 +539,26 @@ func sendControls(cli *net.UDPAddr, tables map[string]bool, hosts string) {
 
 	if l > 0 {
 		l16 := uint16(l)
-		header := make([]byte, 3)
-		header[0] = 1
-		header[1] = byte(l16 >> 8)
-		header[2] = byte(l16 & 0x00ff)
+		tmp := reply.Bytes()
 
-		logger.Debugf("[CONTROL] Sending header: [%d, %d, %d] (length: %d)", header[0], header[1], header[2], l16)
-		if _, err := conn.WriteToUDP(header, cli); err != nil {
-			logger.Warningf("[CONTROL] Failed to send header to %v: %v", cli, err)
+		// 合并发送：header(3字节) + 第一个 data chunk 放在同一个 UDP 包中
+		// 这样大多数情况下（payload < MTU-3）只需一个 UDP 包就能完成控制传输
+		firstChunkSize := min(MTU-3, l)
+		merged := make([]byte, 3+firstChunkSize)
+		merged[0] = 1
+		merged[1] = byte(l16 >> 8)
+		merged[2] = byte(l16 & 0x00ff)
+		copy(merged[3:], tmp[:firstChunkSize])
+
+		logger.Debugf("[CONTROL] Sending merged header+data: %d bytes (header: 3, data: %d)", len(merged), firstChunkSize)
+		if _, err := conn.WriteToUDP(merged, cli); err != nil {
+			logger.Warningf("[CONTROL] Failed to send merged packet to %v: %v", cli, err)
 			return
 		}
 
-		tmp := reply.Bytes()
-		chunks := 0
-		for i := 0; i < l; i += MTU {
+		// 发送剩余分片（如果 payload 超过 MTU-3）
+		chunks := 1
+		for i := firstChunkSize; i < l; i += MTU {
 			chunkSize := min(i+MTU, l) - i
 			logger.Debugf("[CONTROL] Sending chunk %d: %d bytes (offset %d-%d)", chunks+1, chunkSize, i, i+chunkSize-1)
 			if _, err := conn.WriteToUDP(tmp[i:min(i+MTU, l)], cli); err != nil {
@@ -531,7 +567,7 @@ func sendControls(cli *net.UDPAddr, tables map[string]bool, hosts string) {
 			}
 			chunks++
 		}
-		logger.Infof("[CONTROL] Successfully sent %d chunks to client %v", chunks, cli)
+		logger.Infof("[CONTROL] Successfully sent %d packet(s) to client %v (merged header+data)", chunks, cli)
 	} else {
 		logger.Infof("[CONTROL] No controls to send to client %v", cli)
 	}

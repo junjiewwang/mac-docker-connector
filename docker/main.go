@@ -8,10 +8,20 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/songgao/water"
 )
+
+// bufPool 复用 UDP 缓冲区，避免每次分配 + GC 压力
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
 
 var (
 	// MTU maximum transmission unit
@@ -22,6 +32,8 @@ var (
 	addr      = "192.168.251.1/24"
 	heartbeat = 5000
 	chain     = "DOCKER-USER"
+	mode      = "container" // container | service
+	httpPort  = 2522        // VM HTTP API 端口
 	dnsSvr    *DNSServer
 )
 
@@ -33,6 +45,8 @@ func init() {
 	flag.StringVar(&addr, "addr", addr, "virtual network address")
 	flag.StringVar(&chain, "chain", chain, "iptables chain name")
 	flag.IntVar(&heartbeat, "heartbeat", heartbeat, "heartbeat")
+	flag.StringVar(&mode, "mode", mode, "run mode: container or service")
+	flag.IntVar(&httpPort, "http-port", httpPort, "VM HTTP API port (service mode only)")
 }
 
 func runCmd(args string) string {
@@ -207,6 +221,24 @@ func main() {
 		fmt.Printf("invalid command => %s\n", args)
 		os.Exit(1)
 	}
+	// service 模式：启动 LinkManager + HTTP API
+	if mode == "service" {
+		localIP := extractLocalIP(addr)
+		if localIP == "" {
+			fmt.Printf("无法从 addr=%s 提取 local IP\n", addr)
+		} else {
+			linkMgr := NewLinkManager()
+			httpServer := NewVMHTTPServer(linkMgr, localIP, httpPort)
+			if err := httpServer.Start(); err != nil {
+				fmt.Printf("HTTP API 启动失败: %v（继续运行隧道）\n", err)
+			} else {
+				fmt.Printf("[MODE] service 模式已启动: HTTP API http://%s:%d\n", localIP, httpPort)
+			}
+		}
+	} else {
+		fmt.Println("[MODE] container 模式（向后兼容，无 HTTP API）")
+	}
+
 	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		fmt.Printf("invalid address => %s:%d\n", host, port)
@@ -222,32 +254,57 @@ func main() {
 	fmt.Printf("remote => %s\n", conn.RemoteAddr())
 	conn.Write([]byte{0})
 	requested := make(chan bool, 1)
+	// lastActivity 记录最后数据活动时间，用于智能心跳
+	var lastActivity int64 = time.Now().UnixNano()
 	go func() {
-		buf := make([]byte, 2000)
+		bufPtr := bufPool.Get().(*[]byte)
+		buf := *bufPtr
+		defer bufPool.Put(bufPtr)
 		for {
 			n, err := iface.Read(buf)
 			if err != nil {
 				fmt.Printf("tun read error: %v\n", err)
 				continue
 			}
+			if debug {
+				fmt.Printf("[TUN->UDP] %d bytes\n", n)
+			}
 			if _, err := conn.Write(buf[:n]); err != nil {
 				fmt.Printf("udp write error: %v\n", err)
 			}
-			requested <- true
+			atomic.StoreInt64(&lastActivity, time.Now().UnixNano())
+			select {
+			case requested <- true:
+			default:
+			}
 		}
 	}()
+	// 智能心跳：使用 Ticker 替代 time.After，并在有数据流时跳过心跳发送
 	go func() {
 		duration := time.Duration(time.Millisecond * time.Duration(heartbeat))
+		ticker := time.NewTicker(duration)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-requested:
 				continue
-			case <-time.After(duration):
-				conn.Write([]byte{0})
+			case <-ticker.C:
+				// 只有在无数据流时才发送心跳
+				last := time.Unix(0, atomic.LoadInt64(&lastActivity))
+				if time.Since(last) >= duration {
+					conn.Write([]byte{0})
+					if debug {
+						fmt.Printf("[HEARTBEAT] sent (idle for %v)\n", time.Since(last).Round(time.Millisecond))
+					}
+				} else if debug {
+					fmt.Printf("[HEARTBEAT] skipped (last activity %v ago)\n", time.Since(last).Round(time.Millisecond))
+				}
 			}
 		}
 	}()
-	data := make([]byte, 2000)
+	dataPtr := bufPool.Get().(*[]byte)
+	data := *dataPtr
+	defer bufPool.Put(dataPtr)
 	for {
 		n, err := conn.Read(data)
 		if err != nil {
@@ -261,21 +318,33 @@ func main() {
 				var buf = make([]byte, l)
 				var pos = n - 3
 				copy(buf, data[3:n])
+				// 控制包分片接收：添加 500ms 超时，避免永久阻塞
 				for pos < l {
+					conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 					if n, err = conn.Read(data); err != nil {
-						fmt.Println("failed read udp msg, error: " + err.Error())
+						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+							fmt.Printf("control fragment timeout: received %d/%d bytes\n", pos, l)
+						} else {
+							fmt.Println("failed read udp msg, error: " + err.Error())
+						}
 						break
 					}
 					copy(buf[pos:], data[:n])
 					pos += n
 				}
-				if l > 0 {
+				// 恢复无超时限制
+				conn.SetReadDeadline(time.Time{})
+				if pos >= l && l > 0 {
 					applyControls(strings.Split(string(buf), ","), ip)
 				}
 			} else {
 				fmt.Printf("tun write error: %v\n", err)
 			}
 		}
-		requested <- true
+		atomic.StoreInt64(&lastActivity, time.Now().UnixNano())
+		select {
+		case requested <- true:
+		default:
+		}
 	}
 }
