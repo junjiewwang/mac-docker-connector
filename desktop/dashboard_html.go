@@ -1306,9 +1306,16 @@ body::after{
     }
     empty.style.display = 'none';
 
-    // 排序
+    // 排序：先按状态优先级，再按 IP 地址数值排序（保证刷新后顺序稳定）
     const order = {missing:0, conflict:1, wrong_gw:2, extra:3, ok:4};
-    const sorted = [...routes].sort((a,b) => (order[a.status]||99) - (order[b.status]||99));
+    function ipToNum(ip) {
+      const m = (ip || '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)/);
+      return m ? ((+m[1])<<24 | (+m[2])<<16 | (+m[3])<<8 | (+m[4])) >>> 0 : 0;
+    }
+    const sorted = [...routes].sort((a,b) => {
+      const d = (order[a.status]||99) - (order[b.status]||99);
+      return d !== 0 ? d : ipToNum(a.network) - ipToNum(b.network);
+    });
 
     // 构建新旧映射
     const oldRows = {};
