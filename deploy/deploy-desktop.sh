@@ -198,6 +198,83 @@ check_env() {
 }
 
 # ============================================================
+# 从 connector.env 同步配置到 docker-connector.conf
+# ============================================================
+do_sync_config() {
+    log_step "从 connector.env 同步配置到 Desktop 端..."
+
+    local env_file="${SCRIPT_DIR}/connector.env"
+    if [ ! -f "$env_file" ]; then
+        log_warn "connector.env 不存在: ${env_file}，跳过配置同步"
+        return 0
+    fi
+
+    # 读取 connector.env 中的配置
+    local env_port env_addr env_http_port
+    env_port=$(grep -E '^CONNECTOR_PORT=' "$env_file" | cut -d'=' -f2 | tr -d '[:space:]')
+    env_addr=$(grep -E '^CONNECTOR_ADDR=' "$env_file" | cut -d'=' -f2 | tr -d '[:space:]')
+    env_http_port=$(grep -E '^CONNECTOR_HTTP_PORT=' "$env_file" | cut -d'=' -f2 | tr -d '[:space:]')
+
+    if [ -z "$env_port" ] && [ -z "$env_addr" ] && [ -z "$env_http_port" ]; then
+        log_warn "connector.env 中未找到有效配置，跳过同步"
+        return 0
+    fi
+
+    log_info "读取 connector.env:"
+    [ -n "$env_port" ]      && log_info "  CONNECTOR_PORT=${env_port}"
+    [ -n "$env_addr" ]      && log_info "  CONNECTOR_ADDR=${env_addr}"
+    [ -n "$env_http_port" ] && log_info "  CONNECTOR_HTTP_PORT=${env_http_port}"
+
+    # 如果 conf 文件不存在，生成初始配置
+    if [ ! -f "$BREW_CONF" ]; then
+        log_info "配置文件不存在，生成初始配置: ${BREW_CONF}"
+        local conf_content=""
+        [ -n "$env_addr" ]      && conf_content+="addr ${env_addr}\n"
+        [ -n "$env_port" ]      && conf_content+="port ${env_port}\n"
+        [ -n "$env_http_port" ] && conf_content+="vm-http-port ${env_http_port}\n"
+        if [ "$DRY_RUN" = false ]; then
+            echo -e "$conf_content" | sudo tee "$BREW_CONF" > /dev/null
+        else
+            log_cmd "echo -e \"${conf_content}\" | sudo tee ${BREW_CONF}"
+        fi
+        log_info "初始配置文件已生成"
+        return 0
+    fi
+
+    # conf 文件已存在，用 sed 原地更新对应行
+    log_info "更新现有配置文件: ${BREW_CONF}"
+
+    if [ -n "$env_addr" ]; then
+        if sudo grep -qE '^\s*addr\s' "$BREW_CONF"; then
+            run_cmd sudo sed -i '' "s|^[[:space:]]*addr[[:space:]].*|addr ${env_addr}|" "$BREW_CONF"
+        else
+            run_cmd sudo bash -c "echo 'addr ${env_addr}' >> '${BREW_CONF}'"
+        fi
+        log_info "  addr => ${env_addr}"
+    fi
+
+    if [ -n "$env_port" ]; then
+        if sudo grep -qE '^\s*port\s' "$BREW_CONF"; then
+            run_cmd sudo sed -i '' "s|^[[:space:]]*port[[:space:]].*|port ${env_port}|" "$BREW_CONF"
+        else
+            run_cmd sudo bash -c "echo 'port ${env_port}' >> '${BREW_CONF}'"
+        fi
+        log_info "  port => ${env_port}"
+    fi
+
+    if [ -n "$env_http_port" ]; then
+        if sudo grep -qE '^\s*vm-http-port\s' "$BREW_CONF"; then
+            run_cmd sudo sed -i '' "s|^[[:space:]]*vm-http-port[[:space:]].*|vm-http-port ${env_http_port}|" "$BREW_CONF"
+        else
+            run_cmd sudo bash -c "echo 'vm-http-port ${env_http_port}' >> '${BREW_CONF}'"
+        fi
+        log_info "  vm-http-port => ${env_http_port}"
+    fi
+
+    log_info "配置同步完成"
+}
+
+# ============================================================
 # 编译 Desktop 端二进制
 # ============================================================
 do_build() {
@@ -506,6 +583,10 @@ main() {
             ;;
         deploy)
             check_env
+            echo ""
+
+            # Step 0: 从 connector.env 同步配置
+            do_sync_config
             echo ""
 
             # Step 1: 编译

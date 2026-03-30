@@ -39,8 +39,8 @@ ExecStart=/usr/local/bin/docker-connector \
     -host=${CONNECTOR_HOST} \
     -http-port=${CONNECTOR_HTTP_PORT}
 
-# 重启策略
-Restart=always
+# 重启策略（on-failure: 仅在异常退出时重启，正常 stop/SIGTERM 不重启）
+Restart=on-failure
 RestartSec=5
 StartLimitInterval=60
 StartLimitBurst=5

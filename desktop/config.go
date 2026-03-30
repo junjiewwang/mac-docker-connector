@@ -81,6 +81,10 @@ func loadConfig(iface *water.Interface, init bool) *water.Interface {
 				if v, err := strconv.Atoi(val); err == nil {
 					port = v
 				}
+			case "vm-http-port":
+				if v, err := strconv.Atoi(val); err == nil {
+					vmHTTPPort = v
+				}
 			case "mtu":
 				if v, err := strconv.Atoi(val); err == nil {
 					MTU = v
@@ -278,12 +282,13 @@ type ConfigJSON struct {
 }
 
 type BasicConfig struct {
-	Addr     string `json:"addr"`
-	Port     int    `json:"port"`
-	MTU      int    `json:"mtu"`
-	Host     string `json:"host"`
-	LogLevel string `json:"loglevel"`
-	Pong     bool   `json:"pong"`
+	Addr       string `json:"addr"`
+	Port       int    `json:"port"`
+	MTU        int    `json:"mtu"`
+	Host       string `json:"host"`
+	LogLevel   string `json:"loglevel"`
+	Pong       bool   `json:"pong"`
+	VmHTTPPort int    `json:"vm_http_port"`
 }
 
 type RouteConfig struct {
@@ -320,12 +325,13 @@ func parseConfigToJSON() (*ConfigJSON, error) {
 
 	cfg := &ConfigJSON{
 		Basic: BasicConfig{
-			Addr:     addr,
-			Port:     port,
-			MTU:      MTU,
-			Host:     host,
-			LogLevel: logLevel,
-			Pong:     pong,
+			Addr:       addr,
+			Port:       port,
+			MTU:        MTU,
+			Host:       host,
+			LogLevel:   logLevel,
+			Pong:       pong,
+			VmHTTPPort: vmHTTPPort,
 		},
 		ConfigFile: configFile,
 		Watch:      watch,
@@ -405,6 +411,10 @@ func parseConfigToJSON() (*ConfigJSON, error) {
 		case "mtu":
 			if v, err := strconv.Atoi(val); err == nil {
 				cfg.Basic.MTU = v
+			}
+		case "vm-http-port":
+			if v, err := strconv.Atoi(val); err == nil {
+				cfg.Basic.VmHTTPPort = v
 			}
 		case "host":
 			cfg.Basic.Host = val
