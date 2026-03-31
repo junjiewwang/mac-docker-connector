@@ -149,13 +149,52 @@ install_binary() {
 }
 
 # 安装配置文件
+# 优先级: 命令行参数 > 脚本同目录下的 connector.env > VM 已有配置 > 默认值
 install_config() {
     log_step "安装配置文件..."
 
     mkdir -p "$INSTALL_ENV_DIR"
 
-    if [ -f "$INSTALL_ENV" ]; then
-        # 配置文件已存在：仅更新用户显式指定的参数
+    # 检查脚本同目录下是否有 connector.env（由 deploy-to-lima.sh 传输过来）
+    local source_env="${SCRIPT_DIR}/connector.env"
+
+    if [ -f "$source_env" ]; then
+        # 脚本同目录下存在 connector.env，以它为主覆盖 VM 配置
+        cp "$source_env" "$INSTALL_ENV"
+        log_info "已从部署源更新配置: $source_env → $INSTALL_ENV"
+
+        # 从新写入的 env 文件中读取值
+        source "$INSTALL_ENV"
+
+        # 再应用命令行显式指定的参数（命令行优先级最高）
+        local cli_updated=false
+        if [ "$EXPLICIT_ADDR" = true ]; then
+            sed -i "s|^CONNECTOR_ADDR=.*|CONNECTOR_ADDR=${CONNECTOR_ADDR}|" "$INSTALL_ENV"
+            log_info "命令行覆盖 CONNECTOR_ADDR=${CONNECTOR_ADDR}"
+            cli_updated=true
+        fi
+        if [ "$EXPLICIT_PORT" = true ]; then
+            sed -i "s|^CONNECTOR_PORT=.*|CONNECTOR_PORT=${CONNECTOR_PORT}|" "$INSTALL_ENV"
+            log_info "命令行覆盖 CONNECTOR_PORT=${CONNECTOR_PORT}"
+            cli_updated=true
+        fi
+        if [ "$EXPLICIT_HOST" = true ]; then
+            sed -i "s|^CONNECTOR_HOST=.*|CONNECTOR_HOST=${CONNECTOR_HOST}|" "$INSTALL_ENV"
+            log_info "命令行覆盖 CONNECTOR_HOST=${CONNECTOR_HOST}"
+            cli_updated=true
+        fi
+        if [ "$EXPLICIT_HTTP_PORT" = true ]; then
+            sed -i "s|^CONNECTOR_HTTP_PORT=.*|CONNECTOR_HTTP_PORT=${CONNECTOR_HTTP_PORT}|" "$INSTALL_ENV"
+            log_info "命令行覆盖 CONNECTOR_HTTP_PORT=${CONNECTOR_HTTP_PORT}"
+            cli_updated=true
+        fi
+
+        # 重新读取最终生效的值用于显示
+        if [ "$cli_updated" = true ]; then
+            source "$INSTALL_ENV"
+        fi
+    elif [ -f "$INSTALL_ENV" ]; then
+        # 脚本同目录下无 connector.env，但 VM 已有配置：仅更新命令行显式指定的参数
         local updated=false
         if [ "$EXPLICIT_ADDR" = true ]; then
             sed -i "s|^CONNECTOR_ADDR=.*|CONNECTOR_ADDR=${CONNECTOR_ADDR}|" "$INSTALL_ENV"
@@ -184,6 +223,7 @@ install_config() {
         # 从已有 env 文件中读取当前生效的值用于显示
         source "$INSTALL_ENV"
     else
+        # 首次安装：用默认值创建配置文件
         cat > "$INSTALL_ENV" <<EOF
 # Docker Connector 服务配置
 # 修改后执行: systemctl restart docker-connector

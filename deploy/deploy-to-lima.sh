@@ -245,7 +245,7 @@ do_transfer() {
     # 传输 service 文件
     run_cmd limactl cp "${DEPLOY_DIR}/docker-connector.service" "${VM_NAME}:${VM_TMP}/docker-connector.service"
 
-    # 传输 env 模板（仅作参考）
+    # 传输 env 配置文件（install.sh 会以此文件为主覆盖 VM 中的已有配置）
     if [ -f "${DEPLOY_DIR}/connector.env" ]; then
         run_cmd limactl cp "${DEPLOY_DIR}/connector.env" "${VM_NAME}:${VM_TMP}/connector.env"
     fi
