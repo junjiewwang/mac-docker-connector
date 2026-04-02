@@ -45,6 +45,7 @@ func loadConfig(iface *water.Interface, init bool) *water.Interface {
 	news := make(map[string]bool)
 	news1 := make(map[string]string)
 	iptables1 := make(map[string]bool)
+	vmLinks1 := make(map[string]bool)
 	if proxyServer != nil {
 		proxyServer.StartClear()
 	}
@@ -125,6 +126,12 @@ func loadConfig(iface *water.Interface, init bool) *water.Interface {
 					val = fmt.Sprintf("%s %s", vals[1], vals[0])
 				}
 				iptables1[val] = join
+			case "vm-link":
+				if name := normalizeVMLinkName(val); name != "" {
+					vmLinks1[name] = true
+				} else {
+					logger.Warningf("invalid vm-link => %s\n", val)
+				}
 			case "hosts":
 				hosts = val
 			case "proxy":
@@ -200,12 +207,22 @@ func loadConfig(iface *water.Interface, init bool) *water.Interface {
 			iptables1[key] = false
 		}
 	}
+	for key := range vmLinks {
+		if _, ok := vmLinks1[key]; !ok {
+			delete(vmLinks, key)
+		}
+	}
+	for key := range vmLinks1 {
+		vmLinks[key] = true
+	}
 	if cli != nil {
-		sendControls(cli, iptables1, hosts)
+		sendLegacyControls(cli, hosts)
 	}
 	news = nil
 	news1 = nil
 	iptables1 = nil
+	vmLinks1 = nil
+	syncDesiredStateAsync("load-config")
 	return iface
 }
 
@@ -270,15 +287,16 @@ func clearRoutes() {
 
 // ConfigJSON 结构化配置数据模型
 type ConfigJSON struct {
-	Basic    BasicConfig    `json:"basic"`
-	Routes   []RouteConfig  `json:"routes"`
-	Iptables []IptablesConfig `json:"iptables"`
-	Expose   string         `json:"expose"`
-	Tokens   []TokenConfig  `json:"tokens"`
-	Hosts    string         `json:"hosts"`
-	Proxies  []string       `json:"proxies"`
-	ConfigFile string       `json:"config_file"`
-	Watch    bool           `json:"watch"`
+	Basic      BasicConfig     `json:"basic"`
+	Routes     []RouteConfig   `json:"routes"`
+	Iptables   []IptablesConfig `json:"iptables"`
+	VMLinks    []VMLinkConfig  `json:"vm_links"`
+	Expose     string          `json:"expose"`
+	Tokens     []TokenConfig   `json:"tokens"`
+	Hosts      string          `json:"hosts"`
+	Proxies    []string        `json:"proxies"`
+	ConfigFile string          `json:"config_file"`
+	Watch      bool            `json:"watch"`
 }
 
 type BasicConfig struct {
@@ -300,6 +318,10 @@ type IptablesConfig struct {
 	SubnetA string `json:"subnet_a"`
 	SubnetB string `json:"subnet_b"`
 	Action  string `json:"action"` // "connect" 或 "disconnect"
+}
+
+type VMLinkConfig struct {
+	Name string `json:"name"`
 }
 
 type TokenConfig struct {
@@ -345,6 +367,9 @@ func parseConfigToJSON() (*ConfigJSON, error) {
 		for k, v := range tokens {
 			cfg.Tokens = append(cfg.Tokens, TokenConfig{Name: k, IP: v})
 		}
+		for name := range vmLinks {
+			cfg.VMLinks = append(cfg.VMLinks, VMLinkConfig{Name: name})
+		}
 		return cfg, nil
 	}
 
@@ -389,6 +414,10 @@ func parseConfigToJSON() (*ConfigJSON, error) {
 			}
 		case "expose":
 			cfg.Expose = strings.Fields(val)[0]
+		case "vm-link":
+			if name := normalizeVMLinkName(val); name != "" {
+				cfg.VMLinks = append(cfg.VMLinks, VMLinkConfig{Name: name})
+			}
 		case "token":
 			vals := strings.Split(val, " ")
 			if len(vals) >= 2 {

@@ -60,18 +60,6 @@ func runCmd(args string) string {
 	return ""
 }
 
-func getRoutes() map[string]string {
-	routes := make(map[string]string)
-	lines := strings.Split(runCmd("route -n"), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) > 2 {
-			routes[fields[0]] = fields[len(fields)-1]
-		}
-	}
-	return routes
-}
-
 func iptables(a, i, o string) error {
 	// iptables -I DOCKER-USER -i br-net1 -o br-net2 -j ACCEPT
 	// iptables -I DOCKER-USER -i br-net2 -o br-net1 -j ACCEPT
@@ -124,31 +112,16 @@ func rediectDns(domains []string, ip net.IP) error {
 	return nil
 }
 
-func applyControls(cmds []string, ip net.IP) {
-	routes := getRoutes()
+func applyLegacyControls(cmds []string, ip net.IP) {
 	if dnsSvr != nil {
 		dnsSvr.StartClear()
 	}
 	for _, val := range cmds {
 		vals := strings.Split(val, " ")
-		fmt.Printf("control => %s\n", val)
+		fmt.Printf("legacy control => %s\n", val)
 		switch vals[0] {
-		case "connect":
-			i1 := routes[vals[1]]
-			i2 := routes[vals[2]]
-			if len(i1) > 0 && len(i2) > 0 {
-				if iptables("-C", i1, i2) != nil {
-					iptables("-I", i1, i2)
-					iptables("-I", i2, i1)
-				}
-			}
-		case "disconnect":
-			i1 := routes[vals[1]]
-			i2 := routes[vals[2]]
-			if len(i1) > 0 && len(i2) > 0 {
-				iptables("-D", i1, i2)
-				iptables("-D", i2, i1)
-			}
+		case "connect", "disconnect":
+			fmt.Printf("[LEGACY] ignore network rule control '%s' in single-control-plane mode\n", vals[0])
 		case "dns":
 			rediectDns(vals[1:], ip)
 		case "host":
@@ -228,7 +201,9 @@ func main() {
 			fmt.Printf("无法从 addr=%s 提取 local IP\n", addr)
 		} else {
 			linkMgr := NewLinkManager()
-			httpServer := NewVMHTTPServer(linkMgr, localIP, httpPort)
+			reconciler := NewAutoReconciler(linkMgr)
+			reconciler.Start()
+			httpServer := NewVMHTTPServer(linkMgr, reconciler, localIP, httpPort)
 			if err := httpServer.Start(); err != nil {
 				fmt.Printf("HTTP API 启动失败: %v（继续运行隧道）\n", err)
 			} else {
@@ -335,7 +310,7 @@ func main() {
 				// 恢复无超时限制
 				conn.SetReadDeadline(time.Time{})
 				if pos >= l && l > 0 {
-					applyControls(strings.Split(string(buf), ","), ip)
+					applyLegacyControls(strings.Split(string(buf), ","), ip)
 				}
 			} else {
 				fmt.Printf("tun write error: %v\n", err)

@@ -487,8 +487,8 @@ docker exec mac-connector iptables -L FORWARD -n
 | `POST /api/config` | POST | 保存配置 |
 | `GET /api/vm/links` | GET | VM 链路状态（反向代理） |
 | `GET /api/vm/links/stream` | GET | VM 链路 SSE 实时推送 |
-| `POST /api/vm/apply` | POST | 应用 VM 链路规则 |
-| `POST /api/vm/revert` | POST | 还原 VM 链路规则 |
+| `PUT /api/vm/desired-state` | PUT | 更新 VM 期望网络状态（单控制面） |
+| `GET /api/vm/reconcile/status` | GET | 查看收敛状态与 unresolved 信息 |
 | `GET /api/vm/network/info` | GET | VM 网络信息 |
 
 ### 使用示例
@@ -501,15 +501,15 @@ curl -s http://localhost:2511/api/status | jq
 curl -s http://localhost:2511/api/routes/verify | jq
 
 # 查看 VM 链路
-curl -s http://localhost:2511/api/vm/links | jq '.links[] | {name, status, rules_active, rules_total}'
+curl -s http://localhost:2511/api/vm/links | jq '.links[] | {name, status, desired, rules_active, rules_total}'
 
-# 一键 Apply 所有链路
-curl -X POST http://localhost:2511/api/vm/apply | jq
+# 查看收敛状态
+curl -s http://localhost:2511/api/vm/reconcile/status | jq
 
-# Apply 指定链路
-curl -X POST http://localhost:2511/api/vm/apply \
+# 通过单控制面更新期望状态
+curl -X PUT http://localhost:2511/api/vm/desired-state \
   -H 'Content-Type: application/json' \
-  -d '{"links":["host-docker","internet"]}'
+  -d '{"vm_links":["host-docker","internet"]}' | jq
 
 # SSE 实时监听（Ctrl+C 退出）
 curl -N http://localhost:2511/api/vm/links/stream

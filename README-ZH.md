@@ -264,19 +264,18 @@ $ limactl shell default -- sudo journalctl -u docker-connector -f
 | **docker-k8s** | `.service` `.pod` | Docker ↔ Kubernetes | FORWARD 非 mk 网桥↔mk 网桥 |
 | **docker-docker** | — | Docker 跨子网通信 | FORWARD 网桥↔网桥 |
 
-  通过 Dashboard 的 **VM 链路面板** 或直接调用 HTTP API 操作：
+  通过 Dashboard 的 **VM 链路面板** 或直接调用单控制面 HTTP API 操作：
 ```bash
 # 获取所有链路状态
 $ curl http://localhost:2511/api/vm/links
 
-# 应用所有链路
-$ curl -X POST http://localhost:2511/api/vm/apply
+# 获取收敛状态
+$ curl http://localhost:2511/api/vm/reconcile/status
 
-# 应用指定链路
-$ curl -X POST http://localhost:2511/api/vm/apply -d '{"links":["host-docker"]}'
-
-# 还原指定链路
-$ curl -X POST http://localhost:2511/api/vm/revert -d '{"links":["host-k8s.service"]}'
+# 更新期望 VM 链路
+$ curl -X PUT http://localhost:2511/api/vm/desired-state \
+  -H 'Content-Type: application/json' \
+  -d '{"vm_links":["host-docker","internet"]}'
 ```
 
 ## 项目结构

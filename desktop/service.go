@@ -337,8 +337,8 @@ func (c *Connector) run() {
 						logger.Debugf("[CLIENT] Saved peer info to %s", TmpPeer)
 					}
 				}
-				logger.Infof("[CONFIG] Sending controls to new client %v", cli)
-				sendControls(cli, iptables, hosts)
+				logger.Infof("[CONFIG] Sending legacy DNS/hosts controls to new client %v", cli)
+				sendLegacyControls(cli, hosts)
 			}
 			continue
 		}
@@ -504,32 +504,16 @@ func logPacketDetails(data []byte, n int, direction string) {
 	}
 }
 
-func sendControls(cli *net.UDPAddr, tables map[string]bool, hosts string) {
-	logger.Infof("[CONTROL] Sending controls to client %v", cli)
-	logger.Debugf("[CONTROL] IPTables rules: %v", tables)
+func sendLegacyControls(cli *net.UDPAddr, hosts string) {
+	logger.Infof("[CONTROL] Sending legacy DNS/hosts controls to client %v", cli)
 	logger.Debugf("[CONTROL] Hosts config: %s", hosts)
 
 	var reply bytes.Buffer
 	controlCount := 0
-	for k, v := range tables {
-		if reply.Len() > 0 {
-			reply.WriteString(",")
-		}
-		if v {
-			reply.WriteString("connect ")
-			logger.Debugf("[CONTROL] Adding connect rule: %s", k)
-		} else {
-			reply.WriteString("disconnect ")
-			logger.Debugf("[CONTROL] Adding disconnect rule: %s", k)
-		}
-		reply.WriteString(k)
-		controlCount++
-	}
-
 	loadHosts(&reply, hosts)
 	l := reply.Len()
 
-	logger.Infof("[CONTROL] Prepared %d control rules, total payload size: %d bytes", controlCount, l)
+	logger.Infof("[CONTROL] Prepared %d legacy control rules, total payload size: %d bytes", controlCount, l)
 
 	if l < 50 {
 		logger.Infof("[CONTROL] Sending to client %s: %d bytes - %s", cli, l, reply.String())

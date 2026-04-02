@@ -273,19 +273,18 @@ $ limactl shell default -- sudo journalctl -u docker-connector -f
 | **docker-k8s** | `.service` `.pod` | Docker ↔ Kubernetes | FORWARD non-mk bridge↔mk bridge |
 | **docker-docker** | — | Docker cross-subnet communication | FORWARD bridge↔bridge |
 
-  Use the Dashboard's **VM Link Panel** or call the HTTP API directly:
+  Use the Dashboard's **VM Link Panel** or call the single-control-plane HTTP API directly:
 ```bash
 # Get all link status
 $ curl http://localhost:2511/api/vm/links
 
-# Apply all links
-$ curl -X POST http://localhost:2511/api/vm/apply
+# Get reconcile status
+$ curl http://localhost:2511/api/vm/reconcile/status
 
-# Apply specific link
-$ curl -X POST http://localhost:2511/api/vm/apply -d '{"links":["host-docker"]}'
-
-# Revert specific link
-$ curl -X POST http://localhost:2511/api/vm/revert -d '{"links":["host-k8s.service"]}'
+# Update desired VM links
+$ curl -X PUT http://localhost:2511/api/vm/desired-state \
+  -H 'Content-Type: application/json' \
+  -d '{"vm_links":["host-docker","internet"]}'
 ```
 
 ## Project Structure

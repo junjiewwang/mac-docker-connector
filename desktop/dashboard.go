@@ -126,6 +126,7 @@ func startDashboard() {
 		mux.HandleFunc("/api/config/proxy", handleAPIConfigProxy)
 		mux.HandleFunc("/api/config/basic", handleAPIConfigBasic)
 		mux.HandleFunc("/api/config/discover", handleAPIConfigDiscover)
+		mux.HandleFunc("/api/config/vm-link", handleAPIConfigVMLink)
 
 		// VM 反向代理 — /api/vm/* → http://peerIP:2522/api/*
 		registerVMProxy(mux)
@@ -1135,8 +1136,11 @@ func checkVMHealth() {
 	if reachable != oldReachable {
 		if reachable {
 			logger.Infof("[VM-PROXY] ✅ VM HTTP 服务已连接: %s", vmURL)
+			syncDesiredStateAsync("vm-reachable")
 		} else {
 			logger.Warningf("[VM-PROXY] ❌ VM HTTP 服务不可达: %s (err: %v)", vmURL, err)
 		}
+	} else if reachable {
+		syncDesiredStateIfStale("vm-periodic")
 	}
 }

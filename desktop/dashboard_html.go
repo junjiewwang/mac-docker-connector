@@ -2080,58 +2080,61 @@ body::after{
       card.className = 'link-card ' + (link.status || 'inactive');
       const pct = link.rules_total > 0 ? Math.round((link.rules_active / link.rules_total) * 100) : 0;
       const statusCls = link.status || 'inactive';
+      const desiredText = link.desired ? 'AUTO ON' : 'AUTO OFF';
+      const desiredColor = link.desired ? 'var(--accent-green)' : 'var(--text-muted)';
+      const sourceText = link.active_source ? (' · source ' + String(link.active_source).toUpperCase()) : '';
       card.innerHTML =
         '<div class="link-card-header">' +
           '<span class="link-name">' + esc(link.name) + '</span>' +
           '<span class="link-status-badge ' + statusCls + '">' + statusCls.toUpperCase() + '</span>' +
         '</div>' +
         '<div class="link-progress"><div class="link-progress-fill ' + statusCls + '" style="width:' + pct + '%"></div></div>' +
-        '<div class="link-stats">' + link.rules_active + ' / ' + link.rules_total + ' rules active</div>' +
+        '<div class="link-stats">' + link.rules_active + ' / ' + link.rules_total + ' rules active' + sourceText + ' · <span style="color:' + desiredColor + '">' + desiredText + '</span></div>' +
         '<div class="link-actions">' +
-          '<button class="btn btn-apply" onclick="vmLinkApply(\'' + esc(link.name) + '\')">&#x25b6; Apply</button>' +
-          '<button class="btn btn-revert" onclick="vmLinkRevert(\'' + esc(link.name) + '\')">&#x23f9; Revert</button>' +
+          '<button class="btn btn-apply" onclick="vmLinkApply(\'' + esc(link.name) + '\')">&#x25b6; Enable Auto</button>' +
+          '<button class="btn btn-revert" onclick="vmLinkRevert(\'' + esc(link.name) + '\')">&#x23f9; Disable Auto</button>' +
           '<button class="btn" onclick="vmLinkDetail(\'' + esc(link.name) + '\')">&#x1f4cb; Details</button>' +
         '</div>';
       grid.appendChild(card);
     }
   }
 
-  // Apply 链路
+  // Apply 链路（持久化到 Desktop 配置，并由 VM 自动收敛）
   async function vmLinkApply(linkName) {
     try {
-      const res = await fetch('/api/vm/apply', {
+      const res = await fetch('/api/config/vm-link', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({link: linkName})
+        body: JSON.stringify({name: linkName})
       });
       const data = await res.json();
       if (data.ok) {
-        showToast('链路 ' + linkName + ' 已应用', 'success');
+        showToast(data.message || ('链路 ' + linkName + ' 已加入自动收敛'), 'success');
+        setTimeout(function() { fetchVMLinks(); loadConfigTab(); }, 2500);
       } else {
         showToast('应用失败: ' + (data.message || '未知错误'), 'error');
       }
-      fetchVMLinks();
     } catch(e) {
       showToast('Apply 失败: ' + e.message, 'error');
     }
   }
   window.vmLinkApply = vmLinkApply;
 
-  // Revert 链路
+  // Revert 链路（从 Desktop 配置移除，并由 VM 自动清理）
   async function vmLinkRevert(linkName) {
     try {
-      const res = await fetch('/api/vm/revert', {
-        method: 'POST',
+      const res = await fetch('/api/config/vm-link', {
+        method: 'DELETE',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({link: linkName})
+        body: JSON.stringify({name: linkName})
       });
       const data = await res.json();
       if (data.ok) {
-        showToast('链路 ' + linkName + ' 已还原', 'success');
+        showToast(data.message || ('链路 ' + linkName + ' 已移出自动收敛'), 'success');
+        setTimeout(function() { fetchVMLinks(); loadConfigTab(); }, 2500);
       } else {
         showToast('还原失败: ' + (data.message || '未知错误'), 'error');
       }
-      fetchVMLinks();
     } catch(e) {
       showToast('Revert 失败: ' + e.message, 'error');
     }
@@ -2182,10 +2185,11 @@ body::after{
       const tr = document.createElement('tr');
       const statusCls = d.active ? 'ok' : 'missing';
       const statusText = d.active ? 'ACTIVE' : 'MISSING';
+      const typeText = d.source ? ((d.type || 'iptables') + ' · ' + String(d.source).toUpperCase()) : (d.type || 'iptables');
       tr.innerHTML =
         '<td>' + esc(d.label || '--') + '</td>' +
         '<td><span class="status-badge ' + statusCls + '"><span class="status-dot ' + statusCls + '"></span>' + statusText + '</span></td>' +
-        '<td>' + esc(d.type || 'iptables') + '</td>';
+        '<td>' + esc(typeText) + '</td>';
       tbody.appendChild(tr);
     }
   }

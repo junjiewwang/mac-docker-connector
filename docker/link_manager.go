@@ -26,12 +26,16 @@ type Link interface {
 
 // LinkStatus 链路状态
 type LinkStatus struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Status      string       `json:"status"` // "active" / "partial" / "inactive"
-	RulesActive int          `json:"rules_active"`
-	RulesTotal  int          `json:"rules_total"`
-	Details     []RuleDetail `json:"details"`
+	Name          string       `json:"name"`
+	Description   string       `json:"description"`
+	Status        string       `json:"status"` // "active" / "partial" / "inactive"
+	Desired       bool         `json:"desired,omitempty"`
+	ActiveSource  string       `json:"active_source,omitempty"`
+	ManagedActive int          `json:"managed_active,omitempty"`
+	LegacyActive  int          `json:"legacy_active,omitempty"`
+	RulesActive   int          `json:"rules_active"`
+	RulesTotal    int          `json:"rules_total"`
+	Details       []RuleDetail `json:"details"`
 }
 
 // RuleDetail 规则详情
@@ -39,6 +43,7 @@ type RuleDetail struct {
 	Label  string `json:"label"`
 	Active bool   `json:"active"`
 	Type   string `json:"type"` // "iptables", "route", "dns"
+	Source string `json:"source,omitempty"`
 }
 
 // ComputeStatus 根据 active/total 计算状态字符串
@@ -52,6 +57,17 @@ func (s *LinkStatus) ComputeStatus() {
 	} else {
 		s.Status = "inactive"
 	}
+
+	switch {
+	case s.ManagedActive > 0 && s.LegacyActive > 0:
+		s.ActiveSource = "mixed"
+	case s.ManagedActive > 0:
+		s.ActiveSource = "managed"
+	case s.LegacyActive > 0:
+		s.ActiveSource = "legacy"
+	default:
+		s.ActiveSource = ""
+	}
 }
 
 // AppendCheck 向 LinkStatus 追加一条检查结果
@@ -61,10 +77,24 @@ func (s *LinkStatus) AppendCheck(label string, active bool) {
 
 // AppendCheckTyped 向 LinkStatus 追加一条带类型的检查结果
 func (s *LinkStatus) AppendCheckTyped(label string, active bool, ruleType string) {
-	s.Details = append(s.Details, RuleDetail{Label: label, Active: active, Type: ruleType})
+	s.AppendCheckObserved(label, active, ruleType, "")
+}
+
+// AppendCheckObserved 向 LinkStatus 追加一条带来源信息的检查结果
+func (s *LinkStatus) AppendCheckObserved(label string, active bool, ruleType string, source string) {
+	s.Details = append(s.Details, RuleDetail{Label: label, Active: active, Type: ruleType, Source: source})
 	s.RulesTotal++
 	if active {
 		s.RulesActive++
+		switch source {
+		case "managed":
+			s.ManagedActive++
+		case "legacy":
+			s.LegacyActive++
+		case "mixed":
+			s.ManagedActive++
+			s.LegacyActive++
+		}
 	}
 }
 
@@ -216,7 +246,8 @@ func (m *LinkManager) NonMkBridges() []BridgeInfo {
 
 // ParseLinkSpec 解析链路规格字符串，返回 (linkName, subLevel)
 // 例如: "internet" -> ("internet", "")
-//       "host-k8s.service" -> ("host-k8s", "service")
+//
+//	"host-k8s.service" -> ("host-k8s", "service")
 func ParseLinkSpec(spec string) (string, string) {
 	if idx := strings.Index(spec, "."); idx >= 0 {
 		return spec[:idx], spec[idx+1:]
@@ -280,7 +311,7 @@ func (m *LinkManager) batchRemoveRules(title string, rules []ruleInfo) BatchResu
 // rulesToStatus 从规则列表构建 status
 func (m *LinkManager) rulesToStatus(rules []ruleInfo, st *LinkStatus) {
 	for _, r := range rules {
-		ok := m.iptables.RuleExists(r.Table, r.Chain, r.Rule)
+		presence := m.iptables.InspectRule(r.Table, r.Chain, r.Rule)
 		label := r.Label
 		if label == "" {
 			if r.Table == "filter" {
@@ -293,7 +324,7 @@ func (m *LinkManager) rulesToStatus(rules []ruleInfo, st *LinkStatus) {
 		if r.Table == "nat" {
 			ruleType = "nat"
 		}
-		st.AppendCheckTyped(label, ok, ruleType)
+		st.AppendCheckObserved(label, presence.Active(), ruleType, presence.Source())
 	}
 }
 

@@ -13,10 +13,11 @@ import (
 // VMHTTPServer VM 端内嵌 HTTP 服务
 // 绑定 local IP:2522，仅通过 TUN 隧道内网可达
 type VMHTTPServer struct {
-	linkMgr  *LinkManager
-	localIP  string
-	port     int
-	server   *http.Server
+	linkMgr     *LinkManager
+	reconciler  *AutoReconciler
+	localIP     string
+	port        int
+	server      *http.Server
 
 	// SSE 客户端管理
 	sseMu    sync.Mutex
@@ -24,11 +25,12 @@ type VMHTTPServer struct {
 }
 
 // NewVMHTTPServer 创建 VM HTTP 服务
-func NewVMHTTPServer(linkMgr *LinkManager, localIP string, port int) *VMHTTPServer {
+func NewVMHTTPServer(linkMgr *LinkManager, reconciler *AutoReconciler, localIP string, port int) *VMHTTPServer {
 	return &VMHTTPServer{
-		linkMgr: linkMgr,
-		localIP: localIP,
-		port:    port,
+		linkMgr:    linkMgr,
+		reconciler: reconciler,
+		localIP:    localIP,
+		port:       port,
 	}
 }
 
@@ -43,6 +45,8 @@ func (s *VMHTTPServer) Start() error {
 	mux.HandleFunc("/api/revert", s.handleRevert)
 	mux.HandleFunc("/api/network/info", s.handleNetworkInfo)
 	mux.HandleFunc("/api/docker/subnets", s.handleDockerSubnets)
+	mux.HandleFunc("/api/desired-state", s.handleDesiredState)
+	mux.HandleFunc("/api/reconcile/status", s.handleReconcileStatus)
 	mux.HandleFunc("/api/health", s.handleHealth)
 
 	listenAddr := fmt.Sprintf("%s:%d", s.localIP, s.port)
@@ -107,6 +111,9 @@ func (s *VMHTTPServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statuses := s.linkMgr.StatusAll()
+	if s.reconciler != nil {
+		s.reconciler.AnnotateDesired(statuses)
+	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"links": statuses,
 		"names": s.linkMgr.AllLinkNames(),
@@ -119,91 +126,30 @@ type linkActionRequest struct {
 	Link string `json:"link"` // 链路名称，如 "internet" 或 "host-k8s.service"
 }
 
-// handleApply 应用指定链路
+// handleApply 在单控制面模式下不再直接写 VM 规则
 // POST /api/apply {"link":"internet"}
 func (s *VMHTTPServer) handleApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		s.writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 方法")
 		return
 	}
-
-	var req linkActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "无效的请求体: "+err.Error())
-		return
-	}
-
-	linkName, subLevel := ParseLinkSpec(req.Link)
-	link := s.linkMgr.GetLink(linkName)
-	if link == nil {
-		s.writeError(w, http.StatusNotFound, fmt.Sprintf("未知的链路: %s", linkName))
-		return
-	}
-
-	fmt.Printf("[VM-HTTP] 应用链路: %s\n", req.Link)
-	err := link.Apply(subLevel)
-	if err != nil {
-		s.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"ok":      false,
-			"message": err.Error(),
-			"link":    req.Link,
-		})
-		return
-	}
-
-	// 刷新状态
-	statuses := link.Status(subLevel)
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":       true,
-		"link":     req.Link,
-		"statuses": statuses,
+	s.writeJSON(w, http.StatusConflict, map[string]interface{}{
+		"ok":      false,
+		"message": "单控制面模式已启用，请通过 Desktop 配置或 /api/desired-state 更新链路期望状态",
 	})
-
-	// 通知 SSE 客户端
-	s.notifySSEClients()
 }
 
-// handleRevert 还原指定链路
+// handleRevert 在单控制面模式下不再直接删除 VM 规则
 // POST /api/revert {"link":"internet"}
 func (s *VMHTTPServer) handleRevert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		s.writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 方法")
 		return
 	}
-
-	var req linkActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "无效的请求体: "+err.Error())
-		return
-	}
-
-	linkName, subLevel := ParseLinkSpec(req.Link)
-	link := s.linkMgr.GetLink(linkName)
-	if link == nil {
-		s.writeError(w, http.StatusNotFound, fmt.Sprintf("未知的链路: %s", linkName))
-		return
-	}
-
-	fmt.Printf("[VM-HTTP] 还原链路: %s\n", req.Link)
-	err := link.Revert(subLevel)
-	if err != nil {
-		s.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"ok":      false,
-			"message": err.Error(),
-			"link":    req.Link,
-		})
-		return
-	}
-
-	statuses := link.Status(subLevel)
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":       true,
-		"link":     req.Link,
-		"statuses": statuses,
+	s.writeJSON(w, http.StatusConflict, map[string]interface{}{
+		"ok":      false,
+		"message": "单控制面模式已启用，请通过 Desktop 配置或 /api/desired-state 移除链路期望状态",
 	})
-
-	// 通知 SSE 客户端
-	s.notifySSEClients()
 }
 
 // handleNetworkInfo 获取网络信息
@@ -327,6 +273,9 @@ func (s *VMHTTPServer) handleLinksStream(w http.ResponseWriter, r *http.Request)
 // sendSSEStatus 发送一次完整的链路状态到 SSE 流
 func (s *VMHTTPServer) sendSSEStatus(w http.ResponseWriter, flusher http.Flusher) {
 	statuses := s.linkMgr.StatusAll()
+	if s.reconciler != nil {
+		s.reconciler.AnnotateDesired(statuses)
+	}
 	payload := map[string]interface{}{
 		"links": statuses,
 		"time":  time.Now().Format(time.RFC3339),
@@ -354,6 +303,9 @@ func (s *VMHTTPServer) sseBroadcastLoop() {
 		}
 
 		statuses := s.linkMgr.StatusAll()
+		if s.reconciler != nil {
+			s.reconciler.AnnotateDesired(statuses)
+		}
 		payload := map[string]interface{}{
 			"links": statuses,
 			"time":  time.Now().Format(time.RFC3339),
@@ -378,6 +330,9 @@ func (s *VMHTTPServer) notifySSEClients() {
 	}
 
 	statuses := s.linkMgr.StatusAll()
+	if s.reconciler != nil {
+		s.reconciler.AnnotateDesired(statuses)
+	}
 	payload := map[string]interface{}{
 		"links": statuses,
 		"time":  time.Now().Format(time.RFC3339),

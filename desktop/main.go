@@ -32,6 +32,7 @@ var (
 	routes         = make(map[string]bool)
 	tokens         = make(map[string]string)
 	iptables       = make(map[string]bool)
+	vmLinks        = make(map[string]bool)
 	logLevel       = "INFO"
 	sessions       = make(map[uint64]*net.UDPAddr)
 	localIP        = net.IP(make([]byte, 4))

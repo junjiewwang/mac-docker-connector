@@ -35,6 +35,28 @@ type BatchResult struct {
 	Failed  int `json:"failed"`
 }
 
+type RulePresence struct {
+	Managed bool `json:"managed,omitempty"`
+	Legacy  bool `json:"legacy,omitempty"`
+}
+
+func (p RulePresence) Active() bool {
+	return p.Managed || p.Legacy
+}
+
+func (p RulePresence) Source() string {
+	switch {
+	case p.Managed && p.Legacy:
+		return "mixed"
+	case p.Managed:
+		return "managed"
+	case p.Legacy:
+		return "legacy"
+	default:
+		return ""
+	}
+}
+
 // NewIptablesManager 创建新的 iptables 管理器
 func NewIptablesManager(batchMode bool) *IptablesManager {
 	return &IptablesManager{
@@ -44,16 +66,32 @@ func NewIptablesManager(batchMode bool) *IptablesManager {
 }
 
 // RuleExists 检查规则是否存在
+// 兼容两种形态：
+// 1. 原始规则
+// 2. 自动收敛 comment 规则
 func (m *IptablesManager) RuleExists(table, chain string, rule []string) bool {
-	args := []string{"iptables"}
-	if table != "filter" {
-		args = append(args, "-t", table)
-	}
-	args = append(args, "-C", chain)
-	args = append(args, rule...)
+	return m.InspectRule(table, chain, rule).Active()
+}
 
-	err := runCommandSudoSilent(args...)
-	return err == nil
+// InspectRule 检查规则是否存在，并返回其来源（managed / legacy / mixed）
+func (m *IptablesManager) InspectRule(table, chain string, rule []string) RulePresence {
+	m.loadCache(table, chain)
+	key := table + ":" + chain
+	cached := m.cache[key]
+	targetSignature := iptablesRuleSignature(chain, rule)
+	presence := RulePresence{}
+	for _, line := range strings.Split(cached, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || iptablesLineSignature(trimmed) != targetSignature {
+			continue
+		}
+		if strings.Contains(trimmed, managedRuleCommentPrefix) {
+			presence.Managed = true
+		} else {
+			presence.Legacy = true
+		}
+	}
+	return presence
 }
 
 // AddRule 添加规则（支持批量模式）
@@ -150,9 +188,7 @@ func (m *IptablesManager) loadCache(table, chain string) {
 }
 
 // ruleExistsInCache 从缓存中检查规则是否存在
-// 使用逐行精确匹配（而非子串匹配），避免误判：
-// 例如查 "-o br-xxx -m conntrack ..." 时不会误匹配到
-// "-A FORWARD -i br-yyy -o br-xxx -m conntrack ..."
+// 使用语义签名比较，兼容 iptables -S 的参数重排与 managed comment 规则
 func (m *IptablesManager) ruleExistsInCache(table, chain string, rule []string) bool {
 	key := table + ":" + chain
 	cached, ok := m.cache[key]
@@ -160,10 +196,9 @@ func (m *IptablesManager) ruleExistsInCache(table, chain string, rule []string) 
 		m.loadCache(table, chain)
 		cached = m.cache[key]
 	}
-	// 构造 iptables -S 输出中的完整行格式："-A CHAIN rule..."
-	target := "-A " + chain + " " + strings.Join(rule, " ")
+	targetSignature := iptablesRuleSignature(chain, rule)
 	for _, line := range strings.Split(cached, "\n") {
-		if strings.TrimSpace(line) == target {
+		if iptablesLineSignature(line) == targetSignature {
 			return true
 		}
 	}
