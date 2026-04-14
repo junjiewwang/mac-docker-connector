@@ -1,0 +1,132 @@
+# Lima VM 模板 - Docker Connector 专用（基于官方 docker-rootful.yaml）
+# 参考: https://github.com/lima-vm/lima/blob/master/templates/docker-rootful.yaml
+#
+# 用法:
+#   limactl create --name=docker --tty=false /path/to/this/file.yaml
+#   limactl start docker
+#
+# 在宿主机使用 docker（需安装 docker-cli）:
+#   export DOCKER_HOST=$(limactl list docker --format 'unix://{{.Dir}}/sock/docker.sock')
+#   docker ...
+#
+# 此模板创建一个 rootful 的 Docker 虚拟机，用于 mac-docker-connector 项目
+
+# 最低 Lima 版本要求
+minimumLimaVersion: 2.0.0
+
+# ============================================================
+# 项目特有配置（官方模板中无此部分）
+# ============================================================
+
+# VM 资源配置
+cpus: 4
+memory: "4GiB"
+disk: "60GiB"
+
+# 虚拟化类型
+vmType: "qemu"
+
+# Rosetta 支持（Apple Silicon 上运行 x86_64 容器）
+rosetta:
+  enabled: true
+  binfmt: true
+
+# ============================================================
+# 以下基于官方 docker-rootful.yaml 模板
+# ============================================================
+
+# 基础镜像和挂载（使用官方模板引用）
+base:
+  - template:_images/ubuntu-lts
+  - template:_default/mounts
+
+# containerd 由 Docker 管理，不由 Lima 管理
+containerd:
+  system: false
+  user: false
+
+# 预置脚本
+provision:
+  # 配置 host.docker.internal 主机名
+  # 当 hostResolver 禁用时需要此脚本
+  # 也兼容 lima 0.8.2 及更早版本
+  - mode: system
+    script: |
+      #!/bin/sh
+      sed -i 's/host.lima.internal.*/host.lima.internal host.docker.internal/' /etc/hosts
+
+  # 安装 Docker Engine（使用官方一键安装脚本）
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      command -v docker >/dev/null 2>&1 && exit 0
+      export DEBIAN_FRONTEND=noninteractive
+      curl -fsSL https://get.docker.com | sh
+
+  # 安装 docker-connector 所需的额外依赖（iptables + python3）
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq iptables python3 >/dev/null
+      echo "docker-connector 依赖安装完成"
+
+  # 配置 docker.socket 允许当前用户访问
+  - mode: yq
+    path: /etc/systemd/system/docker.socket.d/override.conf
+    format: ini
+    expression: .Socket.SocketUser="{{.User}}"
+
+  # 配置 Docker daemon（启用 CDI 和 containerd snapshotter）
+  - mode: yq
+    path: "/etc/docker/daemon.json"
+    expression: |
+      .features.cdi = true |
+      .features.containerd-snapshotter = {{.Param.containerdSnapshotter}}
+
+# 探针：确保 Docker 安装成功且 dockerd 正在运行
+probes:
+  - script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until command -v docker >/dev/null 2>&1; do sleep 3; done"; then
+        echo >&2 "docker is not installed yet"
+        exit 1
+      fi
+      if ! timeout 30s bash -c "until pgrep dockerd; do sleep 3; done"; then
+        echo >&2 "dockerd is not running"
+        exit 1
+      fi
+    hint: See "/var/log/cloud-init-output.log" in the guest
+
+# 主机名解析配置
+# hostResolver.hosts 中定义的名称在容器内也能解析（需 lima 0.8.3+）
+hostResolver:
+  hosts:
+    host.docker.internal: host.lima.internal
+
+# 端口转发
+portForwards:
+  # Docker socket 转发到宿主机（官方模板标准配置）
+  - guestSocket: "/var/run/docker.sock"
+    hostSocket: "{{.Dir}}/sock/docker.sock"
+  # docker-connector HTTP API 端口转发（项目特有）
+  - guestPort: 2522
+    hostPort: 2522
+    proto: tcp
+
+# VM 创建后的提示信息
+message: |
+  To run `docker` on the host (assumes docker-cli is installed), run the following commands:
+  ------
+  docker context create lima-{{.Name}} --docker "host=unix://{{.Dir}}/sock/docker.sock"
+  docker context use lima-{{.Name}}
+  docker run hello-world
+  ------
+
+# 参数
+param:
+  containerdSnapshotter: true
