@@ -1,0 +1,45 @@
+# minikube-autostart.service
+# Lima VM 启动时自动恢复已有的 minikube 集群
+#
+# 前提条件:
+#   - minikube 已安装且至少创建过一次集群（minikube profile 存在）
+#   - Docker 引擎已启动
+#
+# 安装位置: /etc/systemd/system/minikube-autostart.service
+#
+# 使用方法:
+#   systemctl daemon-reload
+#   systemctl enable minikube-autostart
+#   systemctl start minikube-autostart
+#   journalctl -u minikube-autostart -f
+
+[Unit]
+Description=Minikube Cluster Auto-Start (conditional)
+Documentation=https://minikube.sigs.k8s.io/docs/
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+Before=docker-connector.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# minikube 需要 HOME 来定位 ~/.minikube 目录
+Environment=HOME=/root
+
+# 使用条件启动脚本：仅在 minikube 集群已存在时启动
+ExecStart=/usr/local/bin/minikube-autostart.sh
+
+# 停止时不做操作（minikube 随 Docker 停止自动停止）
+ExecStop=/bin/true
+
+# 启动可能需要较长时间（拉取镜像等）
+TimeoutStartSec=300
+
+# 日志输出到 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minikube-autostart
+
+[Install]
+WantedBy=multi-user.target

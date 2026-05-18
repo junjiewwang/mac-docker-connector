@@ -13,7 +13,7 @@
 [Unit]
 Description=Docker Connector Service (VM Link Management)
 Documentation=https://github.com/wenjunxiao/mac-docker-connector
-After=network-online.target docker.service
+After=network-online.target docker.service minikube-autostart.service
 Wants=network-online.target docker.service
 
 [Service]

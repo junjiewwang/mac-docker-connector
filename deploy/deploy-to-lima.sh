@@ -250,6 +250,14 @@ do_transfer() {
         run_cmd limactl cp "${DEPLOY_DIR}/connector.env" "${VM_NAME}:${VM_TMP}/connector.env"
     fi
 
+    # 传输 minikube-autostart 相关文件
+    if [ -f "${DEPLOY_DIR}/minikube-autostart.sh" ]; then
+        run_cmd limactl cp "${DEPLOY_DIR}/minikube-autostart.sh" "${VM_NAME}:${VM_TMP}/minikube-autostart.sh"
+    fi
+    if [ -f "${DEPLOY_DIR}/minikube-autostart.service" ]; then
+        run_cmd limactl cp "${DEPLOY_DIR}/minikube-autostart.service" "${VM_NAME}:${VM_TMP}/minikube-autostart.service"
+    fi
+
     log_info "文件传输完成"
 }
 

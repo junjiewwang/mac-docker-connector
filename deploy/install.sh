@@ -58,6 +58,10 @@ INSTALL_SERVICE="/etc/systemd/system/docker-connector.service"
 INSTALL_ENV_DIR="/etc/docker-connector"
 INSTALL_ENV="${INSTALL_ENV_DIR}/connector.env"
 
+# Minikube 自动启动相关路径
+MINIKUBE_AUTOSTART_SCRIPT="/usr/local/bin/minikube-autostart.sh"
+MINIKUBE_AUTOSTART_SERVICE="/etc/systemd/system/minikube-autostart.service"
+
 # 脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -285,6 +289,48 @@ install_service() {
     fi
 }
 
+# 安装 minikube 自动启动服务
+install_minikube_autostart() {
+    log_step "安装 minikube 自动启动服务..."
+
+    # 检查源文件是否存在
+    local source_script="${SCRIPT_DIR}/minikube-autostart.sh"
+    local source_service="${SCRIPT_DIR}/minikube-autostart.service"
+
+    if [ ! -f "$source_script" ] || [ ! -f "$source_service" ]; then
+        log_warn "minikube-autostart 文件不完整，跳过安装"
+        log_warn "  需要: $source_script"
+        log_warn "  需要: $source_service"
+        return 0
+    fi
+
+    # 安装启动脚本
+    cp "$source_script" "$MINIKUBE_AUTOSTART_SCRIPT"
+    chmod +x "$MINIKUBE_AUTOSTART_SCRIPT"
+    log_info "已安装启动脚本: $MINIKUBE_AUTOSTART_SCRIPT"
+
+    # 安装 systemd 服务
+    cp "$source_service" "$MINIKUBE_AUTOSTART_SERVICE"
+    log_info "已安装 service 文件: $MINIKUBE_AUTOSTART_SERVICE"
+
+    # 重新加载 systemd
+    systemctl daemon-reload
+
+    # 启用开机自启
+    systemctl enable minikube-autostart
+    log_info "已设置 minikube-autostart 开机自启"
+
+    # 如果 minikube 已安装且有集群存在，立即启动
+    if command -v minikube &>/dev/null && minikube profile list &>/dev/null; then
+        log_info "检测到 minikube 集群存在，正在启动..."
+        systemctl start minikube-autostart || log_warn "minikube 启动失败，可稍后手动启动"
+    else
+        log_info "当前未检测到 minikube 集群，服务将在下次 VM 启动时检查"
+    fi
+
+    log_info "✅ minikube-autostart 服务安装完成"
+}
+
 # 显示安装后信息
 show_post_install() {
     echo ""
@@ -302,6 +348,11 @@ show_post_install() {
     echo -e "    重启服务:  ${BLUE}systemctl restart docker-connector${NC}"
     echo -e "    停止服务:  ${BLUE}systemctl stop docker-connector${NC}"
     echo ""
+    echo -e "  ${YELLOW}Minikube 自动启动:${NC}"
+    echo -e "    查看状态:  ${BLUE}systemctl status minikube-autostart${NC}"
+    echo -e "    查看日志:  ${BLUE}journalctl -u minikube-autostart -f${NC}"
+    echo -e "    禁用自启:  ${BLUE}systemctl disable minikube-autostart${NC}"
+    echo ""
 
     # HTTP API 绑定在 VM 的 local IP 上
     local_ip=$(echo "$CONNECTOR_ADDR" | cut -d'/' -f1)
@@ -315,7 +366,19 @@ show_post_install() {
 do_uninstall() {
     log_step "卸载 Docker Connector..."
 
-    # 停止并禁用服务
+    # 停止并禁用 minikube-autostart 服务
+    if systemctl is-active --quiet minikube-autostart 2>/dev/null; then
+        systemctl stop minikube-autostart
+        log_info "minikube-autostart 服务已停止"
+    fi
+    if systemctl is-enabled --quiet minikube-autostart 2>/dev/null; then
+        systemctl disable minikube-autostart
+        log_info "已取消 minikube-autostart 开机自启"
+    fi
+    [ -f "$MINIKUBE_AUTOSTART_SERVICE" ] && rm -f "$MINIKUBE_AUTOSTART_SERVICE" && log_info "已删除: $MINIKUBE_AUTOSTART_SERVICE"
+    [ -f "$MINIKUBE_AUTOSTART_SCRIPT" ]  && rm -f "$MINIKUBE_AUTOSTART_SCRIPT"  && log_info "已删除: $MINIKUBE_AUTOSTART_SCRIPT"
+
+    # 停止并禁用 docker-connector 服务
     if systemctl is-active --quiet docker-connector 2>/dev/null; then
         systemctl stop docker-connector
         log_info "服务已停止"
@@ -406,6 +469,7 @@ main() {
             install_binary
             install_config
             install_service
+            install_minikube_autostart
             show_post_install
             ;;
     esac
