@@ -62,6 +62,15 @@ if minikube start ${START_ARGS} 2>&1; then
     CLUSTER_IP=$(minikube ip 2>/dev/null || echo "unknown")
     log_info "集群 IP: ${CLUSTER_IP}"
     log_info "可通过 'minikube status' 查看详细状态"
+
+    # 通知 docker-connector 重新检测 kubectl 可用性
+    # 通过 systemctl reload 发送 SIGHUP 信号，触发 K8s 链路 reconcile
+    if systemctl is-active --quiet docker-connector 2>/dev/null; then
+        log_info "通知 docker-connector 重新检测 K8s 可用性..."
+        systemctl reload docker-connector 2>&1 || log_warn "docker-connector reload 失败（非致命）"
+    else
+        log_info "docker-connector 未运行，跳过通知（将在启动时自动检测）"
+    fi
 else
     EXIT_CODE=$?
     log_error "minikube 集群启动失败 (exit code: ${EXIT_CODE})"

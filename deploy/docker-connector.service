@@ -45,6 +45,10 @@ RestartSec=5
 StartLimitInterval=60
 StartLimitBurst=5
 
+# Reload 支持：发送 SIGHUP 重置 kubectl 检查并触发 reconcile
+# 用于 minikube 就绪后通知 docker-connector 重新检测 K8s 可用性
+ExecReload=/bin/kill -HUP $MAINPID
+
 # 安全设置（需要 root 权限操作 iptables / ip route / TUN）
 # 不使用 User/Group 限制，因为需要:
 #   - 创建 TUN 设备
