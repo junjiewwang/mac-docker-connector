@@ -7,9 +7,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/songgao/water"
@@ -209,6 +211,18 @@ func main() {
 			} else {
 				fmt.Printf("[MODE] service 模式已启动: HTTP API http://%s:%d\n", localIP, httpPort)
 			}
+
+			// SIGHUP 信号处理：minikube 就绪后通过 systemctl reload 触发
+			// 重置 kubectl 可用性检查并立即执行一次 reconcile
+			sigHUP := make(chan os.Signal, 1)
+			signal.Notify(sigHUP, syscall.SIGHUP)
+			go func() {
+				for range sigHUP {
+					fmt.Println("[SIGNAL] 收到 SIGHUP，重置 kubectl 检查并触发 reconcile")
+					ResetKubectlCheck()
+					_ = reconciler.Reconcile("sighup-reload")
+				}
+			}()
 		}
 	} else {
 		fmt.Println("[MODE] container 模式（向后兼容，无 HTTP API）")

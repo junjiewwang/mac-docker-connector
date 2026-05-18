@@ -25,45 +25,63 @@ type MinikubeInfo struct {
 	PodCIDR     string `json:"pod_cidr,omitempty"`      // Pod CIDR
 }
 
-// kubectlCheckOnce 确保 kubectl 可用性检查只执行一次
+// kubectl 可用性检查：支持通过 SIGHUP 信号重置，以响应 minikube 就绪事件
 var (
-	kubectlCheckOnce   sync.Once
+	kubectlCheckMu     sync.Mutex
+	kubectlChecked     bool
 	kubectlIsAvailable bool
 )
 
 // kubectlAvailable 检查 kubectl 是否可用（命令存在 + kubeconfig 可达）
-// 结果会被缓存，避免每次调用都检查。首次检查如果失败会打印告警日志。
+// 结果会被缓存，避免每次 reconcile 都检查。可通过 ResetKubectlCheck() 重置。
 func kubectlAvailable() bool {
-	kubectlCheckOnce.Do(func() {
-		// 1. 检查 kubectl 命令是否存在
-		if !commandExists("kubectl") {
-			fmt.Println("[NETWORK] ⚠️ kubectl 未安装，K8s 相关功能不可用")
-			kubectlIsAvailable = false
-			return
-		}
+	kubectlCheckMu.Lock()
+	defer kubectlCheckMu.Unlock()
 
-		// 2. 检查 kubeconfig 是否可达
-		// kubectl 依赖 $HOME/.kube/config 或 $KUBECONFIG 环境变量
-		home := os.Getenv("HOME")
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if home == "" && kubeconfig == "" {
-			fmt.Println("[NETWORK] ⚠️ HOME 和 KUBECONFIG 环境变量均未设置，kubectl 将无法定位 kubeconfig")
-			kubectlIsAvailable = false
-			return
-		}
+	if kubectlChecked {
+		return kubectlIsAvailable
+	}
 
-		// 3. 快速验证：执行 kubectl cluster-info 检查连通性
-		_, err := runCommand("kubectl", "cluster-info", "--request-timeout=3s")
-		if err != nil {
-			fmt.Printf("[NETWORK] ⚠️ kubectl 不可用（cluster-info 失败: %v），K8s 相关功能已禁用\n", err)
-			kubectlIsAvailable = false
-			return
-		}
-
-		fmt.Println("[NETWORK] ✅ kubectl 可用，K8s 功能已启用")
-		kubectlIsAvailable = true
-	})
+	kubectlChecked = true
+	kubectlIsAvailable = doKubectlCheck()
 	return kubectlIsAvailable
+}
+
+// ResetKubectlCheck 重置 kubectl 可用性缓存，下次调用 kubectlAvailable() 时重新检查。
+// 用于响应外部事件（如 minikube 就绪后通过 SIGHUP 通知）。
+func ResetKubectlCheck() {
+	kubectlCheckMu.Lock()
+	defer kubectlCheckMu.Unlock()
+	kubectlChecked = false
+	kubectlIsAvailable = false
+	fmt.Println("[NETWORK] kubectl 可用性缓存已重置，等待下次检查")
+}
+
+// doKubectlCheck 执行实际的 kubectl 可用性检查
+func doKubectlCheck() bool {
+	// 1. 检查 kubectl 命令是否存在
+	if !commandExists("kubectl") {
+		fmt.Println("[NETWORK] ⚠️ kubectl 未安装，K8s 相关功能不可用")
+		return false
+	}
+
+	// 2. 检查 kubeconfig 是否可达
+	home := os.Getenv("HOME")
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if home == "" && kubeconfig == "" {
+		fmt.Println("[NETWORK] ⚠️ HOME 和 KUBECONFIG 环境变量均未设置，kubectl 将无法定位 kubeconfig")
+		return false
+	}
+
+	// 3. 快速验证：执行 kubectl cluster-info 检查连通性
+	_, err := runCommand("kubectl", "cluster-info", "--request-timeout=3s")
+	if err != nil {
+		fmt.Printf("[NETWORK] ⚠️ kubectl 不可用（cluster-info 失败: %v），K8s 相关功能已禁用\n", err)
+		return false
+	}
+
+	fmt.Println("[NETWORK] ✅ kubectl 可用，K8s 功能已启用")
+	return true
 }
 
 // NetworkInfoProvider 网络信息提供者
