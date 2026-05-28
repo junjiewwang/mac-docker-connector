@@ -5,7 +5,7 @@ description: mac-docker-connector 项目环境初始化技能。从全新 macOS 
 
 # mac-docker-connector 环境初始化
 
-从全新 macOS 出发，完成全链路环境搭建。分 6 个阶段执行，每个阶段幂等（可重复执行）。
+从全新 macOS 出发，完成全链路环境搭建。分 6 个阶段执行（+ 可选 Phase 7: Minikube & Kubernetes），每个阶段幂等（可重复执行）。
 
 ## 前置条件
 
@@ -166,6 +166,87 @@ curl http://$CONTAINER_IP
 # 清理测试容器
 limactl shell docker docker rm -f test-nginx
 ```
+
+### Phase 7: Minikube & Kubernetes 配置（条件执行）
+
+> **触发条件**：仅在用户明确需要 K8s/minikube 环境时执行此阶段。
+
+前置检查：Phase 2 已完成（Lima VM `docker` 运行中且 Docker 引擎可用）。
+
+```bash
+# 7.1 安装 socat（端口转发依赖）
+limactl shell docker -- bash -c '
+  command -v socat &>/dev/null && exit 0
+  sudo apt-get update -qq && sudo apt-get install -y -qq socat
+'
+
+# 7.2 安装 minikube
+limactl shell docker -- bash -c '
+  command -v minikube &>/dev/null && exit 0
+  ARCH=$(dpkg --print-architecture)
+  curl -fsSL "https://storage.googleapis.com/minikube/releases/latest/minikube-linux-${ARCH}" -o /usr/local/bin/minikube
+  chmod +x /usr/local/bin/minikube
+'
+
+# 7.3 创建 minikube 集群（docker driver，root 用户需 --force）
+limactl shell docker -- sudo minikube start --driver=docker --force
+
+# 7.4 部署端口转发服务（socat: minikube docker/k8s → VM 0.0.0.0）
+limactl shell docker -- sudo tee /usr/local/bin/minikube-port-forward.sh < deploy/minikube-port-forward.sh > /dev/null
+limactl shell docker -- sudo chmod +x /usr/local/bin/minikube-port-forward.sh
+limactl shell docker -- sudo tee /etc/systemd/system/minikube-port-forward.service < deploy/minikube-port-forward.service > /dev/null
+limactl shell docker -- sudo systemctl daemon-reload
+limactl shell docker -- sudo systemctl enable --now minikube-port-forward
+
+# 7.5 部署 minikube-autostart 服务（开机自动恢复集群）
+limactl shell docker -- sudo tee /usr/local/bin/minikube-autostart.sh < deploy/minikube-autostart.sh > /dev/null
+limactl shell docker -- sudo chmod +x /usr/local/bin/minikube-autostart.sh
+limactl shell docker -- sudo tee /etc/systemd/system/minikube-autostart.service < deploy/minikube-autostart.service > /dev/null
+limactl shell docker -- sudo systemctl daemon-reload
+limactl shell docker -- sudo systemctl enable minikube-autostart
+
+# 7.6 macOS docker context 配置（连接 minikube 内嵌 Docker）
+# 从 minikube 导出 TLS 证书到 macOS
+CERT_DIR="$HOME/.minikube-certs"
+mkdir -p "$CERT_DIR"
+limactl shell docker -- sudo cat /root/.minikube/certs/ca.pem > "$CERT_DIR/ca.pem"
+limactl shell docker -- sudo cat /root/.minikube/certs/cert.pem > "$CERT_DIR/cert.pem"
+limactl shell docker -- sudo cat /root/.minikube/certs/key.pem > "$CERT_DIR/key.pem"
+
+docker context create minikube \
+  --docker "host=tcp://127.0.0.1:12376,ca=${CERT_DIR}/ca.pem,cert=${CERT_DIR}/cert.pem,key=${CERT_DIR}/key.pem"
+
+# 7.7 macOS kubectl 配置
+command -v kubectl || brew install kubectl
+
+# 导出并修改 kubeconfig
+limactl shell docker -- sudo minikube kubectl -- config view --flatten > "$HOME/.kube/minikube-config"
+# 替换 server 地址为通过 Lima 转发的本地端口
+sed -i '' 's|server: https://.*:8443|server: https://127.0.0.1:18443|g' "$HOME/.kube/minikube-config"
+
+# 设置 KUBECONFIG（可加入 shell profile 持久化）
+export KUBECONFIG="$HOME/.kube/minikube-config"
+```
+
+验证：
+```bash
+# docker context 切换到 minikube
+docker context use minikube
+docker ps  # 应看到 minikube 内部的 K8s 组件容器
+
+# kubectl 连接验证
+export KUBECONFIG="$HOME/.kube/minikube-config"
+kubectl get nodes  # 应显示 minikube node Ready
+
+# 切回 Lima VM Docker
+docker context use lima-docker
+```
+
+**docker context 使用方式**：
+| Context | 连接目标 | 用途 |
+|---------|---------|------|
+| `lima-docker` | Lima VM Docker 引擎 | 管理普通容器、构建镜像 |
+| `minikube` | Minikube 内嵌 Docker | 直接推送镜像到 K8s 可用的 Docker（免推 registry） |
 
 ### 环境验证（一键检查）
 

@@ -210,6 +210,77 @@ else
 fi
 
 # ============================================================
+# Phase 7: Minikube & Kubernetes（条件检查）
+# ============================================================
+echo -e "\n${BLUE}═══ Phase 7: Minikube & Kubernetes（条件） ═══${NC}\n"
+
+# 仅在 VM 运行时检查
+PHASE7_VM_STATUS=""
+if command -v limactl &>/dev/null; then
+    PHASE7_VM_STATUS=$(limactl list --format '{{.Name}}:{{.Status}}' 2>/dev/null | grep "^${VM_NAME}:" | cut -d: -f2)
+fi
+
+if [ "$PHASE7_VM_STATUS" = "Running" ]; then
+    MINIKUBE_INSTALLED=$(limactl shell "$VM_NAME" command -v minikube 2>/dev/null || echo "")
+    if [ -n "$MINIKUBE_INSTALLED" ]; then
+        check_pass "minikube 已安装 (VM 内)"
+
+        # minikube 运行状态
+        MINIKUBE_STATUS=$(limactl shell "$VM_NAME" sudo minikube status --format='{{.Host}}' 2>/dev/null || echo "")
+        if [ "$MINIKUBE_STATUS" = "Running" ]; then
+            check_pass "minikube 集群运行中"
+        else
+            check_warn "minikube 集群未运行 (状态: ${MINIKUBE_STATUS:-unknown})"
+        fi
+
+        # 端口转发服务
+        if limactl shell "$VM_NAME" sudo systemctl is-active --quiet minikube-port-forward 2>/dev/null; then
+            check_pass "端口转发服务运行中 (minikube-port-forward)"
+        else
+            check_warn "端口转发服务未运行"
+        fi
+
+        # macOS docker context minikube
+        if docker context inspect minikube &>/dev/null; then
+            check_pass "docker context 'minikube' 已配置"
+        else
+            check_warn "docker context 'minikube' 未配置"
+        fi
+
+        # kubectl 连接
+        if command -v kubectl &>/dev/null; then
+            check_pass "kubectl 已安装: $(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1)"
+            KUBECONFIG_FILE="$HOME/.kube/minikube-config"
+            if [ -f "$KUBECONFIG_FILE" ]; then
+                check_pass "minikube kubeconfig 存在: $KUBECONFIG_FILE"
+                # 尝试连接
+                if KUBECONFIG="$KUBECONFIG_FILE" kubectl get nodes --request-timeout=5s &>/dev/null; then
+                    check_pass "kubectl 连接 minikube 成功"
+                else
+                    check_warn "kubectl 无法连接 minikube（集群可能未运行）"
+                fi
+            else
+                check_warn "minikube kubeconfig 不存在"
+            fi
+        else
+            check_warn "kubectl 未安装"
+        fi
+
+        # TLS 证书
+        CERT_DIR="$HOME/.minikube-certs"
+        if [ -f "$CERT_DIR/ca.pem" ] && [ -f "$CERT_DIR/cert.pem" ] && [ -f "$CERT_DIR/key.pem" ]; then
+            check_pass "minikube TLS 证书已导出: $CERT_DIR"
+        else
+            check_warn "minikube TLS 证书未导出"
+        fi
+    else
+        echo -e "  ${YELLOW}ℹ️  minikube 未安装（Phase 7 为可选步骤，跳过）${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}ℹ️  VM 未运行，跳过 minikube 检查${NC}"
+fi
+
+# ============================================================
 # 汇总
 # ============================================================
 echo -e "\n${BLUE}═══════════════════════════════════${NC}"
