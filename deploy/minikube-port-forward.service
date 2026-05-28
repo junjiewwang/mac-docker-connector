@@ -1,0 +1,43 @@
+# minikube-port-forward.service
+# 将 minikube 内部服务端口转发到 VM 的 0.0.0.0，
+# 使 macOS 宿主机通过 Lima 端口转发可访问 minikube Docker 和 K8s API。
+#
+# 转发映射：
+#   $(minikube ip):2376 → 0.0.0.0:12376  (minikube Docker API)
+#   $(minikube ip):8443 → 0.0.0.0:18443  (minikube K8s API Server)
+#
+# 安装位置: /etc/systemd/system/minikube-port-forward.service
+#
+# 使用方法:
+#   systemctl daemon-reload
+#   systemctl enable minikube-port-forward
+#   journalctl -u minikube-port-forward -f
+
+[Unit]
+Description=Minikube Port Forward (Docker API + K8s API)
+Documentation=https://minikube.sigs.k8s.io/docs/
+After=minikube-autostart.service
+Requires=minikube-autostart.service
+
+[Service]
+Type=simple
+Environment=HOME=/root
+
+ExecStart=/usr/local/bin/minikube-port-forward.sh
+
+# 正常停止时清理 socat 子进程
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# 如果 minikube 未运行则自动重启
+Restart=on-failure
+RestartSec=15
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minikube-port-forward
+
+[Install]
+WantedBy=multi-user.target
